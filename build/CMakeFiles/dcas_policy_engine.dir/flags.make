@@ -6,5 +6,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/home/leo/ads-skynet/DCAS-PolicyEngine/include
 
-CXX_FLAGS = -std=c++17
+CXX_FLAGS = -g -std=c++17
 

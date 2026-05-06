@@ -83,7 +83,7 @@ StepBOutput StepBTransitionEngine::Evaluate(const StepBInput& input, StateTimerS
         snapshot.reason,
         state.absent_latched_run_cycle,
         snapshot.input_snapshot_ts_ms,
-        snapshot.is_attentive && state.recover_elapsed_s >= 0.2,
+        next_state == DriverState::WARNING && snapshot.is_attentive && state.recover_elapsed_s >= 0.2,
     };
 }
 

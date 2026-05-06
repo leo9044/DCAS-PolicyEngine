@@ -40,7 +40,7 @@ Step B 상태(`OK -> WARNING -> ESCALATION -> ABSENT`)를 입력받아,
 - `lkas_switch_event` (optional): `NONE | ON | OFF`
 - `previous_lkas_mode`: `OFF | ON_INACTIVE | ON_ACTIVE` (필수, runtime/state-store 복원값)
 - `notebook_input_alive` (optional): 노트북(인지 입력) 수신 유효 여부
-- `reengagement_confirmed_200ms` (optional): Step B가 계산한 200ms 재참여 확인 신호(EOR 완화용)
+- `reengagement_confirmed_200ms` (optional): Step B가 계산한 200ms 재참여 확인 신호(non-critical EOR/DCA 경고·대응 완화용)
 - `manoeuvre_type` (optional): `NONE | CURVE_FOLLOW | LANE_CHANGE | TURN | MRM`
 - `reason_context_source` (optional): `perception_notebook | step_b_bridge` (맥락 입력 출처 추적용)
 
@@ -48,20 +48,23 @@ Step B 상태(`OK -> WARNING -> ESCALATION -> ABSENT`)를 입력받아,
 
 - 인지팀은 inattentive 판단 시 노트북에서 VLM을 직접 호출하고 맥락(`reason`)을 전달한다.
 - 인지 흐름상 `is_attentive` 판단이 항상 기준 신호이며, Step B는 이를 authoritative input으로 사용한다.
-- `reason`은 `is_attentive=no`일 때 그 시점의 맥락 설명값으로만 사용한다.
-- 따라서 `is_attentive=yes`로 Step B가 정규화한 주기에서는, `reason`이 critical이어도 Step C는 이를 `none`으로 간주한 결과만 받는다.
-- `is_attentive_ts_ms`, `reason_ts_ms`는 Step C 판단용 입력이 아니며, Step B의 **정규화 유효성 판정**에서만 사용된다.
-- Step C는 Step B가 실제 계산에 사용한 최종 `driver_state`와 `reason`만 소비한다.
-- Step C는 매 주기 입력된 `reason` 1개만 소비한다.
-- `reason`은 항상 Step B가 현재 계산 주기에 사용한 값만 유효하며, 이전 주기의 reason은 유지하지 않는다.
+- `reason`은 VLM 호출 지연 때문에 현재 `is_attentive`보다 이전 상황을 설명할 수 있다.
+- Step B는 최신 VLM 결과를 `latest_reason`으로 보존하고, 이번 계산에 실제 사용할 `effective_reason`을 Step C에 전달한다.
+- `critical reason`(`unresponsive/intoxicated`)은 현재 `is_attentive`와 무관하게 항상 `ABSENT/MRM`으로 해석한다.
+- `is_attentive_ts_ms`, `reason_ts_ms`는 Step C 판단용 입력이 아니며, Step B의 최신성 판정/로그/진단에서만 사용된다.
+- Step C는 Step B가 산출한 최종 `driver_state`와 `effective_reason`만 소비한다.
+- Step C는 매 주기 `effective_reason` 1개만 소비한다.
+- 이전 VLM reason이 뒤늦게 들어오는 경우에도 Step B가 최신성 판정 후 채택한 값만 유효하다.
 - 정책 결정 우선순위는 항상 `driver_state`가 최상위이고, 맥락은 overlay/HMI 보강 신호다.
 
 ### 2.1.2 단일 맥락 입력 규칙
 
-- 인지팀은 매 주기 `reason` 1개만 전달한다.
-- `is_attentive=yes`로 정규화된 주기에서는 `reason=none`으로 함께 정규화한다.
-- Step C는 Step B가 정규화한 `reason` 1개를 그대로 overlay/HMI 판단에 사용한다.
-- 이전 주기의 reason은 누적하지 않으며, 현재 계산 주기의 reason만 유효하다.
+- 인지팀은 한 번에 `reason` 1개만 전달한다.
+- Step C는 Step B가 선택한 `effective_reason` 1개를 그대로 overlay/HMI 판단에 사용한다.
+- `is_attentive=yes`라도 recover 상태가 200ms 미만이면 Step B는 non-critical `latest_reason`을 유지해 기존 경고/대응을 계속할 수 있다.
+- `0.2s <= recover_elapsed < T_recover_hold`이면 Step B는 `reengagement_confirmed_200ms=true`를 전달할 수 있고, Step C는 non-critical 경고/대응 채널을 완화한다.
+- `recover_elapsed >= T_recover_hold`이면 Step B는 non-critical reason을 무시하고 `OK + none`을 전달한다.
+- 단, `critical reason`은 어떤 recover 구간에서도 무시하지 않는다.
 - `recover_elapsed` 자체는 Step C 외부 입력 필드가 아니다.
 - 대신 필요한 경우 Step B가 `reengagement_confirmed_200ms` bridge 신호를 출력하고, Step C는 그 신호만 소비한다.
 
@@ -239,7 +242,7 @@ Overlay 불변식:
 | `INFO` | `driver_state=OK` 일반 주행 | "시스템 정상 대기/주행" | 정보성 시각 표시만 | 상태 악화 시 상위 레벨로 즉시 승격 |
 | `INFO` | `driver_override=true` 이후 시스템 OFF 상태 | **"수동 인수 확인 - 시스템 OFF, 자동 재개 없음"** | 정보성 시각 표시 + 고정 배너 권장 | 운전자 명시 `ON` 조작으로 재활성화 완료 시 |
 | `EOR` | `driver_state=WARNING` | "전방 주시 필요" / "핸들을 잡아주세요" | 연속 시각 + 음향/햅틱(최소 1개) | `reengagement_confirmed_200ms=true` 시 경고 채널 완화 가능(상태 유지), Step B 복귀(`OK`) 시 완전 해제 |
-| `DCA` | `driver_state=ESCALATION` 및 `reason ∉ {unresponsive, intoxicated}` | **"즉시 수동 인수"** | 명령형 최대 가시성 + 강한 반복 음향/햅틱 + 맥락 맞춤 강도 증가 | 운전자 인수 확인(`driver_override=true`) 또는 `MRM` 승격 |
+| `DCA` | `driver_state=ESCALATION` 및 `reason ∉ {unresponsive, intoxicated}` | **"즉시 수동 인수"** | 명령형 최대 가시성 + 강한 반복 음향/햅틱 + 맥락 맞춤 강도 증가 | `reengagement_confirmed_200ms=true` 또는 운전자 인수 확인(`driver_override=true`) 시 non-critical 대응 완화 가능, `MRM` 승격 시 대체 |
 | `MRM` | `driver_state=ABSENT` 또는 `mrm_active=true` | **"운전자 부재 - 안전 정지 중"** | 최대 경고(시각/음향/햅틱) + 진행 상태 고정 표시 | run cycle 정책상 자동 해제 금지(수동/재시동 정책 따름) |
 
 문구 구성 규칙:
@@ -362,7 +365,7 @@ Overlay 불변식:
 ```cpp
 PolicyOutput EvaluatePolicy(
     DriverState driver_state,
-    Reason reason,
+    Reason effective_reason,
     float lkas_throttle,
     bool reengagement_confirmed_200ms,
     LkasMode previous_lkas_mode,
@@ -378,7 +381,7 @@ PolicyOutput EvaluatePolicy(
   auto driver_override_lock = driver_override_lock_latched;
   auto lkas_mode = previous_lkas_mode;
 
-  const Reason resolved_reason = NormalizeReason(reason);
+  const Reason resolved_reason = NormalizeReason(effective_reason);
   const float overlay_gain = GetReasonOverlayGain(resolved_reason);
 
   if (driver_state == DriverState::ABSENT &&
@@ -388,8 +391,11 @@ PolicyOutput EvaluatePolicy(
     driver_override_lock = driver_override_lock || (resolved_reason == Reason::INTOXICATED);
   }
 
-  if (driver_state == DriverState::WARNING && reengagement_confirmed_200ms) {
-    hmi = HmiAction::INFO;  // EOR 채널만 완화, 상태는 Step B가 유지
+  if ((driver_state == DriverState::WARNING || driver_state == DriverState::ESCALATION) &&
+      reengagement_confirmed_200ms &&
+      resolved_reason != Reason::INTOXICATED &&
+      resolved_reason != Reason::UNRESPONSIVE) {
+    hmi = HmiAction::INFO;  // non-critical 경고/대응 채널만 완화, 상태는 Step B가 유지
   }
 
   if (lkas_switch_event == LkasSwitchEvent::OFF) {
@@ -441,7 +447,7 @@ PolicyOutput EvaluatePolicy(
 - **잠금 상태 오버라이드 무시**: `driver_override=true and driver_override_lock=true`면 `MRM`이 유지되고 `OFF`로 전환되지 않는지 확인
 - **입력 검증/폴백**: `reason`이 부재/비정상이면 `unknown`으로 정규화되는지 확인
 - **reason 처리**: `reason=intoxicated`에서 Overlay 보수화 규칙이 적용되는지 확인
-- **현재 주기 reason 반영**: 매 주기 현재 계산에 사용한 `reason` 1개만 정책 계산에 사용되는지 확인
+- **effective reason 반영**: Step B가 비동기 VLM 입력 중 선택한 `effective_reason` 1개만 정책 계산에 사용되는지 확인
 - **비율 적용**: 각 상태별 비율값이 정확히 적용되는지 확인
 
 ---
