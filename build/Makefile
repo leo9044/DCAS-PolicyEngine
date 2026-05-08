@@ -153,6 +153,19 @@ dcas_policy_runner/fast:
 .PHONY : dcas_policy_runner/fast
 
 #=============================================================================
+# Target rules for targets named dcas_rt_bridge
+
+# Build rule for target.
+dcas_rt_bridge: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 dcas_rt_bridge
+.PHONY : dcas_rt_bridge
+
+# fast build rule for target.
+dcas_rt_bridge/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dcas_rt_bridge.dir/build.make CMakeFiles/dcas_rt_bridge.dir/build
+.PHONY : dcas_rt_bridge/fast
+
+#=============================================================================
 # Target rules for targets named dcas_policy_tests
 
 # Build rule for target.
@@ -164,6 +177,56 @@ dcas_policy_tests: cmake_check_build_system
 dcas_policy_tests/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/dcas_policy_tests.dir/build.make CMakeFiles/dcas_policy_tests.dir/build
 .PHONY : dcas_policy_tests/fast
+
+#=============================================================================
+# Target rules for targets named rt_control_ipc
+
+# Build rule for target.
+rt_control_ipc: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 rt_control_ipc
+.PHONY : rt_control_ipc
+
+# fast build rule for target.
+rt_control_ipc/fast:
+	$(MAKE) $(MAKESILENT) -f rt-control-ipc/CMakeFiles/rt_control_ipc.dir/build.make rt-control-ipc/CMakeFiles/rt_control_ipc.dir/build
+.PHONY : rt_control_ipc/fast
+
+#=============================================================================
+# Target rules for targets named rt_control_shm_tool
+
+# Build rule for target.
+rt_control_shm_tool: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 rt_control_shm_tool
+.PHONY : rt_control_shm_tool
+
+# fast build rule for target.
+rt_control_shm_tool/fast:
+	$(MAKE) $(MAKESILENT) -f rt-control-ipc/CMakeFiles/rt_control_shm_tool.dir/build.make rt-control-ipc/CMakeFiles/rt_control_shm_tool.dir/build
+.PHONY : rt_control_shm_tool/fast
+
+src/dcas_rt_bridge.o: src/dcas_rt_bridge.cpp.o
+.PHONY : src/dcas_rt_bridge.o
+
+# target to build an object file
+src/dcas_rt_bridge.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dcas_rt_bridge.dir/build.make CMakeFiles/dcas_rt_bridge.dir/src/dcas_rt_bridge.cpp.o
+.PHONY : src/dcas_rt_bridge.cpp.o
+
+src/dcas_rt_bridge.i: src/dcas_rt_bridge.cpp.i
+.PHONY : src/dcas_rt_bridge.i
+
+# target to preprocess a source file
+src/dcas_rt_bridge.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dcas_rt_bridge.dir/build.make CMakeFiles/dcas_rt_bridge.dir/src/dcas_rt_bridge.cpp.i
+.PHONY : src/dcas_rt_bridge.cpp.i
+
+src/dcas_rt_bridge.s: src/dcas_rt_bridge.cpp.s
+.PHONY : src/dcas_rt_bridge.s
+
+# target to generate assembly for a file
+src/dcas_rt_bridge.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dcas_rt_bridge.dir/build.make CMakeFiles/dcas_rt_bridge.dir/src/dcas_rt_bridge.cpp.s
+.PHONY : src/dcas_rt_bridge.cpp.s
 
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
@@ -297,6 +360,12 @@ help:
 	@echo "... dcas_policy_engine"
 	@echo "... dcas_policy_runner"
 	@echo "... dcas_policy_tests"
+	@echo "... dcas_rt_bridge"
+	@echo "... rt_control_ipc"
+	@echo "... rt_control_shm_tool"
+	@echo "... src/dcas_rt_bridge.o"
+	@echo "... src/dcas_rt_bridge.i"
+	@echo "... src/dcas_rt_bridge.s"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"

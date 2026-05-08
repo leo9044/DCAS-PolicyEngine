@@ -10,6 +10,7 @@ set(CMAKE_MAKEFILE_DEPENDS
   "../CMakeLists.txt"
   "CMakeFiles/3.22.1/CMakeCXXCompiler.cmake"
   "CMakeFiles/3.22.1/CMakeSystem.cmake"
+  "/home/leo/ads-skynet/rt-control-ipc/CMakeLists.txt"
   "/usr/share/cmake-3.22/Modules/CMakeCXXInformation.cmake"
   "/usr/share/cmake-3.22/Modules/CMakeCommonLanguageInclude.cmake"
   "/usr/share/cmake-3.22/Modules/CMakeGenericSystem.cmake"
@@ -35,11 +36,15 @@ set(CMAKE_MAKEFILE_OUTPUTS
 # Byproducts of CMake generate step:
 set(CMAKE_MAKEFILE_PRODUCTS
   "CMakeFiles/CMakeDirectoryInformation.cmake"
+  "rt-control-ipc/CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
   "CMakeFiles/dcas_policy_engine.dir/DependInfo.cmake"
   "CMakeFiles/dcas_policy_runner.dir/DependInfo.cmake"
+  "CMakeFiles/dcas_rt_bridge.dir/DependInfo.cmake"
   "CMakeFiles/dcas_policy_tests.dir/DependInfo.cmake"
+  "rt-control-ipc/CMakeFiles/rt_control_ipc.dir/DependInfo.cmake"
+  "rt-control-ipc/CMakeFiles/rt_control_shm_tool.dir/DependInfo.cmake"
   )
