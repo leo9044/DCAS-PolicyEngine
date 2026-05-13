@@ -1,4 +1,5 @@
 #include <chrono>
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -30,6 +31,26 @@ float speed_to_jetracer_input(float speed_kmh) {
     return scaled;
 }
 
+bool parse_bool(const std::string& value) {
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
+dcas::Reason parse_reason(const std::string& value) {
+    if (value == "phone") return dcas::Reason::PHONE;
+    if (value == "drowsy") return dcas::Reason::DROWSY;
+    if (value == "unresponsive") return dcas::Reason::UNRESPONSIVE;
+    if (value == "intoxicated") return dcas::Reason::INTOXICATED;
+    if (value == "none") return dcas::Reason::NONE;
+    return dcas::Reason::UNKNOWN;
+}
+
+dcas::LkasMode parse_lkas_mode(const std::string& value) {
+    if (value == "OFF") return dcas::LkasMode::OFF;
+    if (value == "ON_INACTIVE") return dcas::LkasMode::ON_INACTIVE;
+    if (value == "ON_ACTIVE") return dcas::LkasMode::ON_ACTIVE;
+    return dcas::LkasMode::ON_ACTIVE;
+}
+
 struct MrmEvent {
     bool mrm_request;
     std::uint8_t target_mode;
@@ -50,45 +71,73 @@ void send_mrm_event(bool mrm_request, std::uint8_t target_mode) {
 int main(int argc, char** argv) {
     bool is_attentive = true;
     dcas::Reason reason = dcas::Reason::NONE;
+    bool notebook_input_alive = true;
+    bool driver_override = false;
     double delta_s = 0.02;
+    int period_ms = 10;
+    int iterations = -1;
+    bool verbose = false;
+    dcas::LkasMode lkas_mode = dcas::LkasMode::ON_ACTIVE;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--attentive" && i + 1 < argc) {
-            const std::string value = argv[++i];
-            is_attentive = (value == "1" || value == "true" || value == "yes");
+            is_attentive = parse_bool(argv[++i]);
         } else if (arg == "--reason" && i + 1 < argc) {
-            const std::string value = argv[++i];
-            if (value == "phone") reason = dcas::Reason::PHONE;
-            else if (value == "drowsy") reason = dcas::Reason::DROWSY;
-            else if (value == "unresponsive") reason = dcas::Reason::UNRESPONSIVE;
-            else if (value == "intoxicated") reason = dcas::Reason::INTOXICATED;
-            else if (value == "none") reason = dcas::Reason::NONE;
-            else reason = dcas::Reason::UNKNOWN;
+            reason = parse_reason(argv[++i]);
         } else if (arg == "--dt" && i + 1 < argc) {
             delta_s = std::stod(argv[++i]);
+        } else if (arg == "--period-ms" && i + 1 < argc) {
+            period_ms = std::stoi(argv[++i]);
+        } else if (arg == "--iterations" && i + 1 < argc) {
+            iterations = std::stoi(argv[++i]);
+        } else if (arg == "--once") {
+            iterations = 1;
+        } else if (arg == "--notebook-alive" && i + 1 < argc) {
+            notebook_input_alive = parse_bool(argv[++i]);
+        } else if (arg == "--driver-override" && i + 1 < argc) {
+            driver_override = parse_bool(argv[++i]);
+        } else if (arg == "--lkas-mode" && i + 1 < argc) {
+            lkas_mode = parse_lkas_mode(argv[++i]);
+        } else if (arg == "--verbose") {
+            verbose = true;
+        } else if (arg == "--help") {
+            std::cout
+                << "Usage: dcas_rt_bridge [--attentive true|false] [--reason name] [--dt seconds]\n"
+                << "                      [--period-ms n] [--iterations n|--once] [--verbose]\n"
+                << "                      [--notebook-alive true|false] [--driver-override true|false]\n"
+                << "                      [--lkas-mode OFF|ON_INACTIVE|ON_ACTIVE]\n";
+            return 0;
         }
     }
 
+    if (period_ms < 1) {
+        period_ms = 1;
+    }
+
     rt_ipc::RtControlShm shm;
-    if (!shm.create_or_open(false)) {
+    if (!shm.create_or_open(false) && !shm.create_or_open(true)) {
         std::cerr << "Failed to open rt_control_shm" << std::endl;
         return 1;
     }
 
     dcas::PolicyRuntime runtime{};
-    dcas::LkasMode lkas_mode = dcas::LkasMode::ON_ACTIVE;
 
-    while (true) {
-        rt_ipc::ActuatorToDcasSample speed_sample{};
-        rt_ipc::LkasToDcasSample lkas_sample{};
+    rt_ipc::ActuatorToDcasSample speed_sample{};
+    rt_ipc::LkasToDcasSample lkas_sample{};
+    bool have_speed = false;
+    bool have_lkas = false;
 
-        if (!shm.read_actuator_to_dcas(speed_sample)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            continue;
+    while (iterations != 0) {
+        if (shm.read_actuator_to_dcas(speed_sample)) {
+            have_speed = true;
         }
 
-        if (!shm.read_lkas_to_dcas(lkas_sample)) {
+        if (shm.read_lkas_to_dcas(lkas_sample)) {
+            have_lkas = true;
+        }
+
+        if (!have_speed || !have_lkas) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
@@ -105,8 +154,8 @@ int main(int argc, char** argv) {
 
         tick.step_c.previous_lkas_mode = lkas_mode;
         tick.step_c.lkas_switch_event = dcas::LkasSwitchEvent::NONE;
-        tick.step_c.notebook_input_alive = true;
-        tick.step_c.driver_override = false;
+        tick.step_c.notebook_input_alive = notebook_input_alive;
+        tick.step_c.driver_override = driver_override;
         tick.step_c.lkas_throttle = lkas_sample.lkas_throttle;
 
         const dcas::RuntimeTickOutput output = runtime.Tick(tick);
@@ -114,14 +163,37 @@ int main(int argc, char** argv) {
 
         rt_ipc::DcasToActuatorSample out{};
         out.timestamp_us = now_us();
-        out.final_throttle = static_cast<float>(output.step_c.throttle_limit);
-        out.is_valid = 1;
+        const double raw_throttle = static_cast<double>(lkas_sample.lkas_throttle);
+        const double limit = output.step_c.throttle_limit;
+        const double final_throttle = speed_sample.hardware_fault
+                                          ? 0.0
+                                          : std::clamp(raw_throttle, 0.0, limit);
+        out.final_throttle = static_cast<float>(final_throttle);
+        out.final_steering = lkas_sample.lkas_steering;
+        out.is_valid = speed_sample.hardware_fault ? 0U : 1U;
         shm.write_dcas_to_actuator(out);
+
+        if (verbose) {
+            std::cout << "speed_kmh=" << speed_sample.current_speed_kmh
+                      << " lkas_throttle=" << lkas_sample.lkas_throttle
+                      << " throttle_limit=" << limit
+                      << " final_throttle=" << out.final_throttle
+                      << " final_steering=" << out.final_steering
+                      << " state=" << dcas::to_string(output.step_b.next_state)
+                      << " hmi=" << dcas::to_string(output.step_c.hmi_action)
+                      << " valid=" << out.is_valid
+                      << std::endl;
+        }
 
         if (output.step_c.mrm_active) {
             send_mrm_event(true, static_cast<std::uint8_t>(output.step_c.next_lkas_mode));
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (iterations > 0) {
+            --iterations;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
     }
+
+    return 0;
 }
