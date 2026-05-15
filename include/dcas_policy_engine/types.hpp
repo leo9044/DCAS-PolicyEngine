@@ -72,7 +72,7 @@ struct Thresholds {
     double t_warn_eff_s{3.0};
     double t_esc_eff_s{6.0};
     double t_absent_eff_s{10.0};
-    double t_recover_hold_s{1.2};
+    double t_recover_hold_s{3.0};
 };
 
 struct StepBStateStore {
@@ -80,6 +80,8 @@ struct StepBStateStore {
     double inattentive_elapsed_s{0.0};
     double recover_elapsed_s{0.0};
     bool absent_latched_run_cycle{false};
+    Reason latest_reason{Reason::NONE};
+    std::int64_t latest_reason_ts_ms{0};
 };
 
 struct DashboardState {

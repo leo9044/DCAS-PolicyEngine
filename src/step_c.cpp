@@ -20,11 +20,19 @@ LkasMode ApplySwitchEvent(LkasMode current_mode, LkasSwitchEvent event) {
 double BaseThrottleGain(DriverState state) {
     switch (state) {
         case DriverState::OK: return 1.0;
-        case DriverState::WARNING: return 0.7;
-        case DriverState::ESCALATION: return 0.3;
+        case DriverState::WARNING: return 0.6;
+        case DriverState::ESCALATION: return 0.2;
         case DriverState::ABSENT: return 0.0;
     }
     return 0.0;
+}
+
+double ReasonOverlayGain(DriverState state, Reason reason) {
+    if ((state == DriverState::WARNING || state == DriverState::ESCALATION) &&
+        reason == Reason::DROWSY) {
+        return 0.9;
+    }
+    return 1.0;
 }
 
 }  // namespace
@@ -52,7 +60,10 @@ StepCOutput StepCPolicyEngine::Evaluate(const StepCInput& input) const {
         output.hmi_action = HmiAction::INFO;
         output.mrm_active = false;
     } else {
-        output.throttle_limit = std::max(0.0, input.lkas_throttle * BaseThrottleGain(input.driver_state));
+        output.throttle_limit = std::max(
+            0.0,
+            input.lkas_throttle * BaseThrottleGain(input.driver_state) *
+                ReasonOverlayGain(input.driver_state, input.reason));
         switch (input.driver_state) {
             case DriverState::OK:
                 output.hmi_action = HmiAction::INFO;
@@ -61,7 +72,7 @@ StepCOutput StepCPolicyEngine::Evaluate(const StepCInput& input) const {
                 output.hmi_action = input.reengagement_confirmed_200ms ? HmiAction::INFO : HmiAction::EOR;
                 break;
             case DriverState::ESCALATION:
-                output.hmi_action = HmiAction::DCA;
+                output.hmi_action = input.reengagement_confirmed_200ms ? HmiAction::INFO : HmiAction::DCA;
                 break;
             case DriverState::ABSENT:
                 output.hmi_action = HmiAction::MRM;

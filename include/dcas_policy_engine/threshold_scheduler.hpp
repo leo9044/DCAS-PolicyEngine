@@ -29,7 +29,7 @@ public:
         if (thresholds.t_warn_eff_s > 5.0) {
             thresholds.t_warn_eff_s = 5.0;
         }
-        thresholds.t_recover_hold_s = 1.2;
+        thresholds.t_recover_hold_s = 3.0;
         return thresholds;
     }
 };

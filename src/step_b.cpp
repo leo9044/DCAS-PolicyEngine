@@ -26,12 +26,32 @@ StepBOutput StepBTransitionEngine::Evaluate(const StepBInput& input, StateTimerS
         };
     }
 
+    if (snapshot.reason != Reason::NONE &&
+        input.perception.reason_ts_ms >= state.latest_reason_ts_ms) {
+        state.latest_reason = snapshot.reason;
+        state.latest_reason_ts_ms = input.perception.reason_ts_ms;
+        state_store.Replace(state);
+    }
+    state = state_store.Get();
+
     if (state.absent_latched_run_cycle) {
         state.current_state = DriverState::ABSENT;
         state_store.Replace(state);
         return StepBOutput{
             DriverState::ABSENT,
-            snapshot.reason,
+            state.latest_reason,
+            true,
+            snapshot.input_snapshot_ts_ms,
+            false,
+        };
+    }
+
+    if (is_critical_reason(state.latest_reason)) {
+        state_store.LatchAbsentRunCycle();
+        state = state_store.Get();
+        return StepBOutput{
+            DriverState::ABSENT,
+            state.latest_reason,
             true,
             snapshot.input_snapshot_ts_ms,
             false,
@@ -46,18 +66,6 @@ StepBOutput StepBTransitionEngine::Evaluate(const StepBInput& input, StateTimerS
     state = state_store.Get();
 
     DriverState next_state = state.current_state;
-
-    // Critical reason is evaluated only after is_attentive=yes -> reason=none normalization.
-    if (is_critical_reason(snapshot.reason)) {
-        state_store.LatchAbsentRunCycle();
-        return StepBOutput{
-            DriverState::ABSENT,
-            snapshot.reason,
-            true,
-            snapshot.input_snapshot_ts_ms,
-            false,
-        };
-    }
 
     if (snapshot.is_attentive) {
         if (state.current_state != DriverState::OK &&
@@ -78,12 +86,18 @@ StepBOutput StepBTransitionEngine::Evaluate(const StepBInput& input, StateTimerS
     }
     state_store.Replace(state);
 
+    Reason effective_reason = state.latest_reason;
+    if (next_state == DriverState::OK ||
+        (snapshot.is_attentive && state.recover_elapsed_s >= thresholds.t_recover_hold_s)) {
+        effective_reason = Reason::NONE;
+    }
+
     return StepBOutput{
         next_state,
-        snapshot.reason,
+        effective_reason,
         state.absent_latched_run_cycle,
         snapshot.input_snapshot_ts_ms,
-        next_state == DriverState::WARNING && snapshot.is_attentive && state.recover_elapsed_s >= 0.2,
+        next_state != DriverState::OK && snapshot.is_attentive && state.recover_elapsed_s >= 0.2,
     };
 }
 

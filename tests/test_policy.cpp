@@ -65,8 +65,8 @@ void TestStepBRequiresSameSnapshot() {
     tick.step_b.delta_s = 1.0;
 
     const auto output = runtime.Tick(tick);
-    ExpectTrue(output.step_b.next_state == dcas::DriverState::OK, "mismatched timestamps must not advance state");
-    ExpectTrue(output.step_b.input_snapshot_ts_ms == 0, "invalid snapshot must not emit snapshot timestamp");
+    ExpectTrue(output.step_b.next_state == dcas::DriverState::ABSENT, "async critical reason should still force ABSENT");
+    ExpectTrue(output.step_b.input_snapshot_ts_ms == 1000, "async reason should preserve attentive snapshot timestamp");
 }
 
 void TestStepBCriticalReasonLatchesAbsent() {
@@ -99,7 +99,7 @@ void TestStepBRecoversToOkAfterHold() {
     recover.step_b.perception.is_attentive_ts_ms = 2000;
     recover.step_b.perception.reason = dcas::Reason::PHONE;
     recover.step_b.perception.reason_ts_ms = 2000;
-    recover.step_b.delta_s = 1.3;
+    recover.step_b.delta_s = 3.1;
 
     const auto output = runtime.Tick(recover);
     ExpectTrue(output.step_b.next_state == dcas::DriverState::OK, "recover hold should return state to OK");
@@ -111,11 +111,10 @@ void TestAttentiveCriticalReasonIsNormalizedToOk() {
     const auto output = runtime.Tick(
         MakeTick(true, dcas::Reason::INTOXICATED, 1000, 1.0));
 
-    ExpectTrue(output.step_b.next_state == dcas::DriverState::OK, "attentive snapshot should remain OK");
-    ExpectTrue(output.step_b.reason == dcas::Reason::NONE, "attentive snapshot must normalize critical reason to none");
-    ExpectTrue(!output.step_b.reengagement_confirmed_200ms, "OK state should not emit WARNING/EOR reengagement confirmation");
-    ExpectTrue(output.step_c.hmi_action == dcas::HmiAction::INFO, "attentive normalized snapshot should stay INFO");
-    ExpectTrue(!output.step_b.absent_latched_run_cycle, "attentive normalized critical reason must not latch ABSENT");
+    ExpectTrue(output.step_b.next_state == dcas::DriverState::ABSENT, "critical reason should force ABSENT even if attentive is true");
+    ExpectTrue(output.step_b.reason == dcas::Reason::INTOXICATED, "critical reason should be preserved for Step C");
+    ExpectTrue(output.step_c.hmi_action == dcas::HmiAction::MRM, "critical attentive snapshot should map to MRM");
+    ExpectTrue(output.step_b.absent_latched_run_cycle, "critical reason must latch ABSENT");
 }
 
 void TestContinuousNonCriticalProgressionMidBand() {
@@ -163,7 +162,7 @@ void TestRecover200msClearsEorButHoldsWarning() {
     ExpectTrue(confirmed.step_b.reengagement_confirmed_200ms, "200ms confirmation flag should be true");
     ExpectTrue(confirmed.step_c.hmi_action == dcas::HmiAction::INFO, "200ms confirmation should clear EOR only");
 
-    const auto recovered = runtime.Tick(MakeTick(true, dcas::Reason::PHONE, 1002, 0.9, 0.2, 0.8, confirmed.step_c.next_lkas_mode));
+    const auto recovered = runtime.Tick(MakeTick(true, dcas::Reason::PHONE, 1002, 2.8, 0.2, 0.8, confirmed.step_c.next_lkas_mode));
     ExpectTrue(recovered.step_b.next_state == dcas::DriverState::OK, "recover hold should return WARNING to OK");
     ExpectTrue(recovered.step_c.hmi_action == dcas::HmiAction::INFO, "OK recovery should stay INFO");
 }
@@ -198,7 +197,7 @@ void TestStepCWarningMapsToEor() {
 
     const auto output = engine.Evaluate(input);
     ExpectTrue(output.hmi_action == dcas::HmiAction::EOR, "WARNING must map to EOR");
-    ExpectNear(output.throttle_limit, 0.56, 1e-9, "WARNING should reduce throttle by base gain");
+    ExpectNear(output.throttle_limit, 0.48, 1e-9, "WARNING should reduce throttle by base gain");
 }
 
 void TestStepCWarningCanClearEorAfter200msConfirmation() {
@@ -212,7 +211,7 @@ void TestStepCWarningCanClearEorAfter200msConfirmation() {
 
     const auto output = engine.Evaluate(input);
     ExpectTrue(output.hmi_action == dcas::HmiAction::INFO, "confirmed reengagement should clear EOR while state is held");
-    ExpectNear(output.throttle_limit, 0.56, 1e-9, "WARNING throttle should remain conservative until state recovers");
+    ExpectNear(output.throttle_limit, 0.48, 1e-9, "WARNING throttle should remain conservative until state recovers");
 }
 
 void TestStepCNotebookInputAliveOnlyBlocksActivation() {
@@ -277,7 +276,7 @@ void TestEscalationReengagementClearsButHoldsState() {
     const auto escalation = runtime.Tick(MakeTick(false, dcas::Reason::PHONE, 1004, 0.0, 0.2, 0.8, mode));
     ExpectTrue(escalation.step_b.next_state == dcas::DriverState::ESCALATION, "4.0s should reach ESCALATION");
     ExpectTrue(escalation.step_c.hmi_action == dcas::HmiAction::DCA, "ESCALATION should map to DCA");
-    ExpectNear(escalation.step_c.throttle_limit, 0.24, 1e-9, "ESCALATION should scale to ~30% of 0.8");
+    ExpectNear(escalation.step_c.throttle_limit, 0.16, 1e-9, "ESCALATION should scale to ~20% of 0.8");
 }
 
 void TestAllStateThrottleLimits() {
@@ -294,24 +293,24 @@ void TestAllStateThrottleLimits() {
     ExpectNear(ok_out.throttle_limit, 1.0, 1e-9, "OK should use full throttle");
     ExpectTrue(ok_out.hmi_action == dcas::HmiAction::INFO, "OK should map to INFO");
 
-    // WARNING: ~70%
+    // WARNING: ~60%
     dcas::StepCInput warn_input{};
     warn_input.driver_state = dcas::DriverState::WARNING;
-    warn_input.reason = dcas::Reason::DROWSY;
+    warn_input.reason = dcas::Reason::PHONE;
     warn_input.previous_lkas_mode = dcas::LkasMode::ON_ACTIVE;
     warn_input.lkas_throttle = 1.0;
     const auto warn_out = engine.Evaluate(warn_input);
-    ExpectNear(warn_out.throttle_limit, 0.7, 1e-9, "WARNING should scale to ~70%");
+    ExpectNear(warn_out.throttle_limit, 0.6, 1e-9, "WARNING should scale to ~60%");
     ExpectTrue(warn_out.hmi_action == dcas::HmiAction::EOR, "WARNING should map to EOR");
 
-    // ESCALATION: ~30%
+    // ESCALATION: ~20%
     dcas::StepCInput esc_input{};
     esc_input.driver_state = dcas::DriverState::ESCALATION;
     esc_input.reason = dcas::Reason::PHONE;
     esc_input.previous_lkas_mode = dcas::LkasMode::ON_ACTIVE;
     esc_input.lkas_throttle = 1.0;
     const auto esc_out = engine.Evaluate(esc_input);
-    ExpectNear(esc_out.throttle_limit, 0.3, 1e-9, "ESCALATION should scale to ~30%");
+    ExpectNear(esc_out.throttle_limit, 0.2, 1e-9, "ESCALATION should scale to ~20%");
     ExpectTrue(esc_out.hmi_action == dcas::HmiAction::DCA, "ESCALATION should map to DCA");
 
     // ABSENT: 0%
@@ -324,6 +323,19 @@ void TestAllStateThrottleLimits() {
     ExpectNear(absent_out.throttle_limit, 0.0, 1e-9, "ABSENT should zero throttle");
     ExpectTrue(absent_out.hmi_action == dcas::HmiAction::MRM, "ABSENT should map to MRM");
     ExpectTrue(absent_out.mrm_active, "ABSENT should activate MRM");
+}
+
+void TestDrowsyOverlayAddsConservatism() {
+    dcas::StepCPolicyEngine engine{};
+    dcas::StepCInput input{};
+    input.driver_state = dcas::DriverState::WARNING;
+    input.reason = dcas::Reason::DROWSY;
+    input.previous_lkas_mode = dcas::LkasMode::ON_ACTIVE;
+    input.lkas_throttle = 1.0;
+
+    const auto output = engine.Evaluate(input);
+    ExpectNear(output.throttle_limit, 0.54, 1e-9, "drowsy WARNING overlay should apply additional 10% conservatism");
+    ExpectTrue(output.hmi_action == dcas::HmiAction::EOR, "drowsy WARNING should still map to EOR");
 }
 
 void TestCriticalReasonIntoxicatedAlsoJumpsToAbsent() {
@@ -387,8 +399,8 @@ void TestSequenceTimelineWarningRecoverWithExplicitMockInputs() {
     ExpectTrue(t3.step_b.reengagement_confirmed_200ms, "timeline t3: >=200ms should confirm reengagement");
     ExpectTrue(t3.step_c.hmi_action == dcas::HmiAction::INFO, "timeline t3: WARNING with confirmation should clear EOR only");
 
-    const auto t4 = runtime.Tick(MakeTick(true, dcas::Reason::PHONE, 1004, 0.9, 0.2, 0.8, mode));
-    ExpectTrue(t4.step_b.next_state == dcas::DriverState::OK, "timeline t4: recover 1.2s should return to OK");
+    const auto t4 = runtime.Tick(MakeTick(true, dcas::Reason::PHONE, 1004, 2.7, 0.2, 0.8, mode));
+    ExpectTrue(t4.step_b.next_state == dcas::DriverState::OK, "timeline t4: recover 3.0s should return to OK");
     ExpectTrue(t4.step_b.reason == dcas::Reason::NONE, "timeline t4: attentive snapshot should normalize reason to none");
     ExpectTrue(t4.step_c.hmi_action == dcas::HmiAction::INFO, "timeline t4: recovered OK should map to INFO");
 }
@@ -427,8 +439,8 @@ void TestSequenceTimelineReasonTimestampMismatchThenValidCritical() {
         3000,
         3001,
         1.0));
-    ExpectTrue(mismatch.step_b.next_state == dcas::DriverState::OK, "timeline async reason: mismatched snapshot must hold current state");
-    ExpectTrue(mismatch.step_b.input_snapshot_ts_ms == 0, "timeline async reason: mismatched snapshot should be invalid");
+    ExpectTrue(mismatch.step_b.next_state == dcas::DriverState::ABSENT, "timeline async reason: critical reason should force ABSENT");
+    ExpectTrue(mismatch.step_b.input_snapshot_ts_ms == 3000, "timeline async reason: attentive timestamp should remain valid");
 
     const auto valid_critical = runtime.Tick(MakeTickWithReasonTs(
         false,
@@ -464,6 +476,7 @@ int main() {
     TestNoReasonStillEscalatesByTimer();
     TestEscalationReengagementClearsButHoldsState();
     TestAllStateThrottleLimits();
+    TestDrowsyOverlayAddsConservatism();
     TestCriticalReasonIntoxicatedAlsoJumpsToAbsent();
     TestLowBandFasterEscalation();
     TestHighBandSlowerEscalation();
