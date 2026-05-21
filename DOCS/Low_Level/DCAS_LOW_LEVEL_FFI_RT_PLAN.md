@@ -15,7 +15,7 @@
 
 즉, 포트폴리오 문장으로는 아래가 안전하고 강하다.
 
-> POSIX 실시간 API, Linux PREEMPT_RT, CPU/IRQ 격리, shared memory IPC, MCU heartbeat fail-safe를 결합하여 mixed-criticality SDV 제어 경로의 Freedom From Interference를 계측 기반으로 검증했다.
+> POSIX 실시간 API, Linux PREEMPT_RT, CPU/IRQ 격리, shared memory IPC, MCU heartbeat fail-safe, fault injection, FTTI 측정을 결합하여 mixed-criticality SDV 제어 경로의 Freedom From Interference와 fault reaction behavior를 계측 기반으로 검증했다.
 
 ---
 
@@ -28,6 +28,7 @@
 - POSIX `clock_nanosleep(TIMER_ABSTIME)`, `mlockall`, `mmap`, `pthread`/`sched` 기반 구현은 Linux, QNX, RTOS 계열로 설명을 확장하기 좋다.
 - `cyclictest`, `rtla timerlat/osnoise`, `ftrace`, `perf`를 사용한 계측 계획은 실시간성 주장을 데이터로 바꾸는 데 적합하다.
 - 하위 MCU heartbeat는 Linux가 멈췄을 때의 실행 간섭 방어 논리로 매우 설득력 있다.
+- fault injection과 FTTI 측정을 추가하면 "단순 튜닝 프로젝트"가 아니라 "결함 발생 시 안전 전이 시간을 검증한 safety evidence project"로 격상된다.
 
 ### 2.2 수정해야 할 위험한 표현
 
@@ -58,6 +59,7 @@ Jetson Linux에서 아래 조건을 만족하는지 단계별로 측정한다.
 - RT thread CPU migration: 0회
 - LKAS/DCAS/Actuator shared memory pipeline 정상 동작
 - Linux 제어 노드 정지 또는 heartbeat 손실 시 MCU 안전 모니터가 FTTI 예산 내 안전 상태로 전이
+- fault injection campaign에서 fault detection time, fault reaction time, safe-state entry time을 분리 측정
 
 ### 3.2 포트폴리오 목표
 
@@ -70,6 +72,7 @@ Jetson Linux에서 아래 조건을 만족하는지 단계별로 측정한다.
 - POSIX periodic loop 코드
 - shared memory IPC 코드 설명
 - Zephyr heartbeat safety monitor 코드
+- fault injection harness와 FTTI 측정 리포트
 - FFI 관점의 실험 리포트
 
 ---
@@ -220,11 +223,54 @@ Independent Safety Monitor
 - `dcas_rt_bridge` hang 시 final command timeout 감지
 - Jetson heartbeat 중단 시 MCU takeover 시간
 - forced kernel panic 또는 GPIO heartbeat 중단 시 MCU safe output 유지
+- fault injection 시점부터 safe-state output이 실제로 인가되는 시점까지의 FTTI budget 측정
 
 주의:
 
 - Linux 내부 오류를 Linux가 스스로 완전히 방어한다고 주장하지 않는다.
 - 실행 간섭의 최종 방어는 독립 MCU가 맡는 구조로 설명한다.
+
+### 5.4 Fault Injection + FTTI 측정
+
+이 프로젝트의 신기성 보강 축은 fault injection campaign이다.
+
+기본 개념:
+
+```text
+fault injection time
+        |
+        v
+fault detection time
+        |
+        v
+fault reaction start
+        |
+        v
+safe-state output applied
+```
+
+측정할 시간:
+
+- `T_inject`: 결함을 주입한 시각
+- `T_detect`: DCAS, Actuator, MCU 중 하나가 결함을 감지한 시각
+- `T_react`: safe-state 전이를 시작한 시각
+- `T_safe`: throttle zero, relay cut, neutral command 등 안전 출력이 실제 인가된 시각
+- `Detection Latency = T_detect - T_inject`
+- `Reaction Latency = T_safe - T_detect`
+- `FTTI Consumption = T_safe - T_inject`
+
+초기 목표:
+
+- heartbeat 기반 fault는 30-50 ms 이내 safe-state 진입
+- shared memory stale fault는 actuator watchdog timeout 이내 safe-state 진입
+- process kill fault는 다음 control cycle 또는 watchdog timeout 이내 safe-state 진입
+- CPU/GPU overload fault는 deadline miss count와 safe-state fallback 여부를 함께 기록
+
+핵심 포인트:
+
+- FTTI는 임의로 "달성했다"고 말하는 값이 아니라, fault별로 budget을 정의하고 그 budget을 얼마나 소비했는지 측정해야 한다.
+- 단순 평균이 아니라 max, p99, p99.9, miss count를 함께 제시해야 한다.
+- fault injection은 실차 주행이 아니라 바퀴를 띄운 bench, dry-run actuator, 또는 low-speed supervised 조건에서만 수행한다.
 
 ---
 
@@ -240,10 +286,25 @@ Independent Safety Monitor
 작업:
 
 - Jetson CPU 개수 확인: 현재 `nproc = 6`
+- multi-user contamination check 수행
+- 현재 로그인 사용자와 사용자별 프로세스 수 기록
+- 다른 사용자 프로세스가 CPU/GPU/메모리/카메라/시리얼을 점유 중인지 확인
 - 프로세스 목록 및 CPU affinity 기록
 - `rt_control_shm_tool --mode status` 상태 기록
 - `dcas_rt_bridge` 정상/경고/escalation/mock reason test 재실행
 - 현재 커널 버전, JetPack/L4T 버전, governor, thermal 상태 기록
+
+측정 조건 분리:
+
+- `Clean baseline`: 다른 사용자 프로세스를 최소화한 통제 상태
+- `Shared-load baseline`: 4명 공용 Jetson의 실제 개발 환경을 반영한 상태
+
+주의:
+
+- 계정이 4개인 것 자체는 문제가 아니다.
+- 문제는 다른 사용자의 프로세스가 CPU/GPU/메모리/IRQ/I/O/카메라/시리얼 자원을 점유해 latency tail을 오염시키는 것이다.
+- 따라서 모든 latency/FTTI 결과에는 측정 당시 로그인 사용자, 주요 백그라운드 프로세스, GPU 사용 상태를 함께 기록한다.
+- Phase 1 이후 성능 비교는 같은 조건끼리만 비교한다. 예를 들어 `Clean stock`은 `Clean isolated`, `Clean PREEMPT_RT`와 비교하고, `Shared-load stock`은 `Shared-load isolated`, `Shared-load PREEMPT_RT`와 비교한다.
 
 산출물:
 
@@ -397,11 +458,13 @@ sudo trace-cmd report
 - threaded IRQ를 통해 interrupt context가 scheduler priority 체계에 더 잘 들어오게 된다.
 - 하지만 모든 latency source가 사라지는 것은 아니므로 trace로 남는 tail latency를 설명해야 한다.
 
-### Phase 5. MCU heartbeat fail-safe
+### Phase 5. Fault Injection + FTTI budget verification
 
 목표:
 
 - Linux 제어 경로가 멈춰도 하위 MCU가 독립적으로 안전 상태를 유지하는 구조를 만든다.
+- 결함 주입 시점부터 safe-state 출력 인가까지의 시간을 fault별로 측정한다.
+- "정상 동작한다"가 아니라 "정의한 FTTI budget 안에서 안전 전이한다"를 데이터로 입증한다.
 
 권장 구조:
 
@@ -429,25 +492,33 @@ INIT -> ARMED -> RUNNING -> HEARTBEAT_LOST -> SAFE_STATE
 
 시험:
 
-- `dcas_rt_bridge` kill
-- `rt_actuator` kill
-- shared memory writer stop
-- GPIO heartbeat stop
-- Jetson process CPU starvation
-- optional: controlled kernel panic only on safe bench setup
+| Fault ID | 주입 결함 | 주입 방법 | 기대 감지 주체 | 기대 안전 반응 |
+| --- | --- | --- | --- | --- |
+| FI-01 | DCAS process crash | `SIGKILL dcas_rt_bridge` | Actuator watchdog 또는 MCU heartbeat | final command stale -> throttle zero |
+| FI-02 | DCAS process hang | `SIGSTOP dcas_rt_bridge` 또는 debug flag | Actuator watchdog 또는 MCU heartbeat | final command stale -> throttle zero |
+| FI-03 | Actuator process crash | `SIGKILL rt_actuator` | MCU heartbeat 또는 external monitor | MCU safe output 유지 |
+| FI-04 | SHM stale sample | DCAS write 중단 | Actuator freshness checker | throttle zero |
+| FI-05 | SHM corrupted sample | invalid magic/version/sequence injection | DCAS/Actuator IPC validator | sample reject + safe fallback |
+| FI-06 | LKAS raw command stuck high | fixed high throttle write | DCAS clamp | policy limit 이하로 제한 |
+| FI-07 | heartbeat loss | GPIO toggle stop | MCU heartbeat monitor | safe-state 전이 |
+| FI-08 | CPU overload | stress-ng / fork bomb 제한 환경 | RT probe / watchdog | deadline miss 기록, 필요 시 safe fallback |
+| FI-09 | GPU/memory pressure | YOLO/VLM/stress memory | RT probe / watchdog | latency tail 기록 |
+| FI-10 | controlled kernel panic | bench-only panic trigger | MCU heartbeat monitor | independent safe-state 유지 |
 
 성공 기준:
 
 - heartbeat 3주기 누락 시 safe state 전이
 - 총 fault reaction time 50 ms 이내 목표
 - safe state 이후 throttle output zero 또는 relay cut 유지
+- fault별 `T_inject`, `T_detect`, `T_react`, `T_safe` CSV 기록
+- fault별 max, p99, p99.9 FTTI consumption 계산
+- fault별 pass/fail 기준을 `FTTI_budget_ms`로 명시
 
 주의:
 
 - 실제 주행 중 kernel panic 유도는 위험하므로 바퀴를 띄운 bench에서만 수행한다.
 - MCU takeover는 "ASIL-D 구현"이 아니라 "independent safety monitor prototype"이라고 표현한다.
-
----
+- `SIGKILL`, `SIGSTOP`, SHM corrupt, kernel panic 등은 모두 위험 시나리오이므로 dry-run actuator 또는 물리적으로 바퀴를 띄운 상태를 기본 조건으로 한다.
 
 ## 7. 구현 산출물 제안
 
@@ -463,6 +534,8 @@ ads-skynet/
     tools/
       rt_periodic_probe/
       ffi_load_runner/
+      fault_injector/
+      ftti_analyzer/
       trace_collect/
     scripts/
       plot_latency.py
@@ -476,6 +549,8 @@ ads-skynet/
 - `rt_periodic_probe`: 10 ms POSIX loop latency logger
 - `dcas_timing_logger`: 실제 `dcas_rt_bridge`에 timing log 옵션 추가
 - `ffi_load_runner`: CPU/memory/GPU/LKAS 부하 조합 실행 스크립트
+- `fault_injector`: process kill/hang, SHM stale/corrupt, heartbeat stop, load spike를 재현하는 fault injection runner
+- `ftti_analyzer`: `T_inject`, `T_detect`, `T_react`, `T_safe` 로그를 모아 FTTI consumption을 계산하는 분석 도구
 - `plot_latency.py`: histogram, CDF, tail latency plot
 - `zephyr_heartbeat_monitor`: GPIO heartbeat monitor
 
@@ -484,6 +559,8 @@ ads-skynet/
 - `BASELINE_SYSTEM_REPORT.md`
 - `FFI_TEST_MATRIX.md`
 - `RT_LATENCY_RESULTS.md`
+- `FAULT_INJECTION_MATRIX.md`
+- `FTTI_BUDGET_REPORT.md`
 - `KERNEL_TRACE_ANALYSIS.md`
 - `MCU_FAILSAFE_TEST_REPORT.md`
 - `PORTFOLIO_SUMMARY.md`
@@ -503,6 +580,9 @@ ads-skynet/
 | scheduling | CPU migration | 0회 |
 | IPC | stale sample | 0회 또는 timeout-safe |
 | safety | heartbeat timeout reaction | 30-50 ms 내 |
+| fault injection | FTTI consumption | fault별 budget 이내 |
+| fault injection | detection latency | fault별 p99/p99.9/max 제시 |
+| fault injection | safe-state correctness | throttle zero 또는 relay cut 100% |
 | evidence | reproducibility | command + raw CSV + plot 포함 |
 
 장시간 검증 단계:
@@ -524,8 +604,10 @@ ads-skynet/
 6. IRQ affinity 조정
 7. PREEMPT_RT 적용 후 동일 실험 반복
 8. `rtla`/`ftrace`로 tail latency 원인 분석
-9. MCU heartbeat fail-safe bench test
-10. 결과를 FFI 관점으로 재정리
+9. fault injection harness 구현
+10. MCU heartbeat fail-safe bench test
+11. fault별 FTTI budget verification
+12. 결과를 FFI 관점으로 재정리
 
 ---
 
@@ -538,6 +620,10 @@ ads-skynet/
 좋은 서사:
 
 > 비전 AI와 차량 제어가 같은 Jetson HPC에서 공존하는 mixed-criticality 상황을 만들고, QM workload가 DCAS/Actuator 제어 경로에 주는 간섭을 시간/메모리/실행 관점으로 분해했다. POSIX periodic loop, shared memory IPC, CPU/IRQ 격리, PREEMPT_RT, kernel tracing, MCU heartbeat fail-safe를 단계적으로 적용하여 Freedom From Interference를 계측 기반 evidence package로 구성했다.
+
+더 좋은 서사:
+
+> 여기에 fault injection campaign을 추가하여 DCAS crash, actuator hang, shared memory stale/corruption, heartbeat loss, CPU/GPU overload 상황에서 fault detection부터 safe-state output까지의 FTTI consumption을 측정했다. 즉, 단순히 latency를 낮춘 것이 아니라 결함 발생 후 안전 전이 시간까지 검증했다.
 
 더 강한 한 줄:
 
@@ -555,6 +641,8 @@ ads-skynet/
 | `SCHED_FIFO` runaway | 시스템 lock-up | watchdog shell, priority 제한, CPU 하나는 housekeeping으로 남김 |
 | 측정 시간이 짧음 | evidence 약함 | smoke/30min/1h/8h 단계 구분 |
 | ASIL 표현 과장 | 전문성 저하 | "ISO 26262-inspired", "ASIL-like", "evidence package"로 표현 |
+| fault injection 중 실제 차량 움직임 | 물리적 위험 | dry-run actuator, 바퀴 리프트, 저속 supervised 조건만 허용 |
+| fault 주입 시각 불명확 | FTTI 데이터 신뢰도 저하 | monotonic timestamp, GPIO marker, CSV event log 동시 기록 |
 
 ---
 
@@ -569,6 +657,7 @@ ads-skynet/
 - Linux osnoise tracer documentation: https://docs.kernel.org/trace/osnoise-tracer.html
 - Linux cpuset documentation: https://docs.kernel.org/admin-guide/cgroup-v1/cpusets.html
 - Linux nohz documentation: https://docs.kernel.org/timers/no_hz.html
+- Linux real-time group scheduling: https://docs.kernel.org/scheduler/sched-rt-group.html
 - The Open Group POSIX `clock_nanosleep`: https://pubs.opengroup.org/onlinepubs/009696899/functions/clock_nanosleep.html
 - The Open Group POSIX memory locking definitions in `<sys/mman.h>`: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sys_mman.h.html
 - The Open Group POSIX `mmap`: https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html
@@ -611,4 +700,20 @@ feat(rt): add POSIX 10ms periodic latency probe
 - CSV output
 - deadline miss count
 
-이것이 완성되면 그 다음부터는 모든 주장이 숫자로 바뀐다.
+이것이 완성되면 그 다음에는 fault injection harness를 붙인다.
+
+두 번째 커밋:
+
+```text
+feat(safety): add fault injection and FTTI event logger
+```
+
+최소 기능:
+
+- `T_inject`, `T_detect`, `T_react`, `T_safe` monotonic timestamp 기록
+- `dcas_rt_bridge` kill/hang 주입
+- SHM stale sample 주입
+- heartbeat stop 주입
+- fault별 FTTI budget pass/fail 리포트
+
+이 두 축이 완성되면 프로젝트는 단순 jitter 튜닝이 아니라 "interference와 fault reaction을 모두 측정한 safety evidence project"가 된다.
