@@ -26,7 +26,8 @@ StepBOutput StepBTransitionEngine::Evaluate(const StepBInput& input, StateTimerS
         };
     }
 
-    if (snapshot.reason != Reason::NONE &&
+    if (snapshot.reason != Reason::NONE && 
+        snapshot.reason != Reason::BLOCKED_CAMERA &&
         input.perception.reason_ts_ms >= state.latest_reason_ts_ms) {
         state.latest_reason = snapshot.reason;
         state.latest_reason_ts_ms = input.perception.reason_ts_ms;
@@ -44,6 +45,26 @@ StepBOutput StepBTransitionEngine::Evaluate(const StepBInput& input, StateTimerS
             snapshot.input_snapshot_ts_ms,
             false,
         };
+    }
+
+    if (input.perception.camera_blocked) {
+        const double blocked_elapsed_s =
+            (snapshot.input_snapshot_ts_ms - input.perception.camera_blocked_ts_ms) / 1000.0;
+
+        if (blocked_elapsed_s >= thresholds.t_absent_eff_s) {
+            state.latest_reason = Reason::BLOCKED_CAMERA;
+            state_store.Replace(state);
+        } else {
+            state.current_state = DriverState::WARNING;
+            state_store.Replace(state);
+            return StepBOutput{
+                DriverState::WARNING,
+                Reason::BLOCKED_CAMERA,
+                false,
+                snapshot.input_snapshot_ts_ms,
+                false,
+            };
+        }
     }
 
     if (is_critical_reason(state.latest_reason)) {

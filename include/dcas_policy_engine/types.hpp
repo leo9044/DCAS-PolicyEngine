@@ -19,6 +19,7 @@ enum class Reason {
     UNRESPONSIVE,
     INTOXICATED,
     UNKNOWN,
+    BLOCKED_CAMERA,
 };
 
 enum class HmiAction {
@@ -59,6 +60,8 @@ struct PerceptionInput {
     std::int64_t is_attentive_ts_ms{0};
     Reason reason{Reason::NONE};
     std::int64_t reason_ts_ms{0};
+    bool camera_blocked{false};
+    std::int64_t camera_blocked_ts_ms{0};
 };
 
 struct NormalizedSnapshot {
@@ -98,7 +101,7 @@ struct StepCLatchedState {
 };
 
 inline bool is_critical_reason(Reason reason) {
-    return reason == Reason::UNRESPONSIVE || reason == Reason::INTOXICATED;
+    return reason == Reason::UNRESPONSIVE || reason == Reason::INTOXICATED || reason == Reason::BLOCKED_CAMERA;
 }
 
 inline const char* to_string(DriverState value) {
@@ -119,6 +122,7 @@ inline const char* to_string(Reason value) {
         case Reason::UNRESPONSIVE: return "unresponsive";
         case Reason::INTOXICATED: return "intoxicated";
         case Reason::UNKNOWN: return "unknown";
+        case Reason::BLOCKED_CAMERA: return "blocked_camera";
     }
     return "unknown";
 }
