@@ -22,6 +22,9 @@ add_executable(dcas_rt_bridge src/dcas_rt_bridge.cpp)
 target_link_libraries(dcas_rt_bridge PRIVATE dcas_policy_engine rt_control_ipc)
 target_link_libraries(dcas_rt_bridge PRIVATE rt)
 
+add_executable(rt_periodic_probe src/rt_periodic_probe.cpp)
+target_link_libraries(rt_periodic_probe PRIVATE rt)
+
 enable_testing()
 add_executable(dcas_policy_tests tests/test_policy.cpp)
 target_link_libraries(dcas_policy_tests PRIVATE dcas_policy_engine)
