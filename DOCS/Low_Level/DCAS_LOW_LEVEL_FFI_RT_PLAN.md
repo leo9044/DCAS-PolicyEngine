@@ -533,6 +533,17 @@ isolcpus=4,5 nohz_full=4,5 rcu_nocbs=4,5 irqaffinity=0-3
 - `isolcpus`, `nohz_full`, `rcu_nocbs`는 잘못 적용하면 오히려 latency가 나빠질 수 있다.
 - Jetson의 특정 IRQ/GPU driver thread가 특정 CPU를 요구할 수 있으므로 적용 전후를 반드시 계측한다.
 
+### Phase 3 실행 요약 (Case D)
+
+- **무엇을 수행했나:** `cpuset` 기반 CPU 격리(리얼타임 슬라이스 `rt.slice` -> CPU4, QM 슬라이스 `qm.slice` -> CPU0-3) 적용 후, GPU 부하(Case C 스트레스)와 함께 `rt_periodic_probe`를 권한 있는 상태로 실행하여 tail-latency를 측정함.
+- **관련 스크립트:** [tools/ffi_load_runner/case_d.sh](tools/ffi_load_runner/case_d.sh), 적용 스크립트: [tools/ffi_load_runner/apply_isolation.sh](tools/ffi_load_runner/apply_isolation.sh)
+- **로그 위치:** `/tmp/rt_tests/phase3/case_d_*/` (rt CSV 및 모니터 로그 포함)
+- **측정 요약 (rt_periodic_probe, 60s):** samples=6000, deadline_misses=0, p50=22 µs, p99=259 µs, max=409 µs
+- **비교(이전 Case C, privileged):** Case C 최종값 p50=24 µs, p99=294 µs, max=488 µs — Phase 3 격리 후 p99 및 max가 개선되어 tail이 줄어듦(≈16% max 개선).
+- **시스템 상태:** dmesg에서 OOM/kill 징후 없음; cgroup 이동 및 cpuset 설정은 스크립트 로그에 기록됨.
+- **결론 및 권장:** CPU/cgroup 수준의 격리는 GPU/DRAM 관련 간섭 전체를 제거하지는 못하지만 control-path tail latency를 유의미하게 낮춤. 다음 단계로 PREEMPT_RT 커널 적용(Phase 4 / Case E)을 통해 더 낮은 worst-case를 목표로 비교 실험을 진행할 것을 권장함.
+
+
 ### Phase 4. PREEMPT_RT 커널 및 kernel tracing
 
 목표:
@@ -798,6 +809,83 @@ feat(rt): add POSIX 10ms periodic latency probe
 
 - `clock_nanosleep(TIMER_ABSTIME)` 기반 10 ms loop
 - `mlockall`
+
+---
+
+### Phase 2 실행 체크리스트 (Actionable)
+
+목표: Phase 1에서 수집된 `RT_LATENCY_RESULTS.md`를 바탕으로, 의도적 QM 부하를 가해 latency tail과 deadline miss를 재현하고, 격리/튜닝 조치의 효과를 계량적으로 측정한다.
+
+핵심 산출물:
+- `DOCS/Low_Level/PHASE2_RT_RESULTS.md` (CSV 링크, 명령행, histogram, p50/p99/p99.9/p99.99, deadline miss)
+- raw CSV files in `/tmp/rt_tests/` with descriptive filenames
+
+단계별 체크리스트:
+1. 준비
+  - Phase 1 결과 (`DOCS/Low_Level/RT_LATENCY_RESULTS.md`) 확인
+  - 측정용 디렉터리 생성: `mkdir -p /tmp/rt_tests/phase2`
+2. 부하 시나리오 스크립트 작성
+  - `tools/ffi_load_runner`에 `case_b.sh`, `case_c.sh`, `case_d.sh` 스크립트 추가
+  - 각 스크립트는 load 시작 → 안정화 30s → `rt_periodic_probe` 실행 60s → load stop 순서로 동작
+3. 측정 실행 예시 (stock kernel)
+
+```bash
+mkdir -p /tmp/rt_tests/phase2
+sudo /home/leo/ads-skynet/DCAS-PolicyEngine/build/rt_periodic_probe \
+  --period-us 10000 --duration 60 --cpu 4 --priority 80 \
+  --output /tmp/rt_tests/phase2/phase2_stock_caseB_cpu4.csv
+# in parallel, start load script
+sudo ./tools/ffi_load_runner/case_b.sh &
+```
+
+4. 측정 실행 예시 (isolation + PREEMPT_RT)
+
+```bash
+# apply cpuset/cgroup and IRQ affinity as defined in Phase 3
+sudo ./tools/ffi_load_runner/apply_isolation.sh
+sudo /home/leo/ads-skynet/DCAS-PolicyEngine/build/rt_periodic_probe \
+  --period-us 10000 --duration 60 --cpu 4 --priority 80 \
+  --output /tmp/rt_tests/phase2/phase2_preemptrt_caseD_cpu4.csv
+sudo ./tools/ffi_load_runner/case_d.sh &
+```
+
+5. 수집 및 분석
+  - 모든 CSV를 `tools/plot_latency.py`로 가공하여 histogram과 CDF 생성
+  - `tools/summarize_rt_results.py`로 p50/p99/p99.9/p99.99/max/deadline-miss 계산
+  - 결과 요약을 `DOCS/Low_Level/PHASE2_RT_RESULTS.md`로 작성
+
+6. 검토 항목
+  - 각 케이스별 CPU pinning이 실제 유지되었는지 확인 (`taskset -pc <pid>`)
+  - perf stat으로 page-faults/major-faults 확인
+  - CPU migration, IRQ/softirq 스파이크는 `trace-cmd`로 추적
+
+권장 파일 템플릿: `DOCS/Low_Level/PHASE2_RT_RESULTS.md`
+
+```
+# Phase2 RT Results
+
+## Test metadata
+- command: ...
+- kernel: ...
+- boot params: ...
+- note: ...
+
+## Case B (stock, load)
+- CSV: /tmp/rt_tests/phase2/...
+- p50: ... p99: ... p99.9: ... p99.99: ... max: ...
+- deadline misses: N
+
+## Plots
+- histogram: path
+- cdf: path
+
+## Interpretation
+- short conclusions and next tuning step
+```
+
+---
+
+다음 단계로는 `tools/rt_periodic_probe` 빌드 확인 및 `tools/ffi_load_runner`의 간단한 `case_b.sh` 스크립트를 추가해 드릴까요?
 - stack pre-fault
 - `SCHED_FIFO` priority option
 - CPU affinity option
