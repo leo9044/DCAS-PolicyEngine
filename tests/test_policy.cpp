@@ -244,7 +244,6 @@ void TestStepCAbsentActivatesMrmAndLockoutOnSecondActivation() {
 }
 
 void TestNoReasonStillEscalatesByTimer() {
-    // S-B-003: 부주의 reason 없어도 타이머로 ESCALATION
     dcas::PolicyRuntime runtime{};
     dcas::LkasMode mode = dcas::LkasMode::ON_ACTIVE;
 
@@ -260,19 +259,14 @@ void TestNoReasonStillEscalatesByTimer() {
 }
 
 void TestEscalationReengagementClearsButHoldsState() {
-    // S-B-202A: ESCALATION 상태에서 복귀 경로도 WARNING과 유사하게 작동
-    // (실제 full recovery에는 3s가 필요하므로 상태 전이 검증은 생략)
-    // 대신 ESCALATION 상태의 일관성을 검증
     dcas::PolicyRuntime runtime{};
-    
-    // ESCALATION 진입 (4s 부주의)
+
     dcas::LkasMode mode = dcas::LkasMode::ON_ACTIVE;
     for (int i = 0; i < 4; ++i) {
         const auto output = runtime.Tick(MakeTick(false, dcas::Reason::PHONE, 1000 + i, 1.0, 0.2, 0.8, mode));
         mode = output.step_c.next_lkas_mode;
     }
-    
-    // tick 4에서 ESCALATION 도달 (4s inattention)
+
     const auto escalation = runtime.Tick(MakeTick(false, dcas::Reason::PHONE, 1004, 0.0, 0.2, 0.8, mode));
     ExpectTrue(escalation.step_b.next_state == dcas::DriverState::ESCALATION, "4.0s should reach ESCALATION");
     ExpectTrue(escalation.step_c.hmi_action == dcas::HmiAction::DCA, "ESCALATION should map to DCA");
@@ -280,10 +274,8 @@ void TestEscalationReengagementClearsButHoldsState() {
 }
 
 void TestAllStateThrottleLimits() {
-    // S-C-002: 모든 상태의 throttle 제한 검증
     dcas::StepCPolicyEngine engine{};
 
-    // OK: ~100%
     dcas::StepCInput ok_input{};
     ok_input.driver_state = dcas::DriverState::OK;
     ok_input.reason = dcas::Reason::NONE;
@@ -293,7 +285,6 @@ void TestAllStateThrottleLimits() {
     ExpectNear(ok_out.throttle_limit, 1.0, 1e-9, "OK should use full throttle");
     ExpectTrue(ok_out.hmi_action == dcas::HmiAction::INFO, "OK should map to INFO");
 
-    // WARNING: ~60%
     dcas::StepCInput warn_input{};
     warn_input.driver_state = dcas::DriverState::WARNING;
     warn_input.reason = dcas::Reason::PHONE;
@@ -303,7 +294,6 @@ void TestAllStateThrottleLimits() {
     ExpectNear(warn_out.throttle_limit, 0.6, 1e-9, "WARNING should scale to ~60%");
     ExpectTrue(warn_out.hmi_action == dcas::HmiAction::EOR, "WARNING should map to EOR");
 
-    // ESCALATION: ~20%
     dcas::StepCInput esc_input{};
     esc_input.driver_state = dcas::DriverState::ESCALATION;
     esc_input.reason = dcas::Reason::PHONE;
@@ -313,7 +303,6 @@ void TestAllStateThrottleLimits() {
     ExpectNear(esc_out.throttle_limit, 0.2, 1e-9, "ESCALATION should scale to ~20%");
     ExpectTrue(esc_out.hmi_action == dcas::HmiAction::DCA, "ESCALATION should map to DCA");
 
-    // ABSENT: 0%
     dcas::StepCInput absent_input{};
     absent_input.driver_state = dcas::DriverState::ABSENT;
     absent_input.reason = dcas::Reason::INTOXICATED;
@@ -339,7 +328,6 @@ void TestDrowsyOverlayAddsConservatism() {
 }
 
 void TestCriticalReasonIntoxicatedAlsoJumpsToAbsent() {
-    // S-B-104 variant: intoxicated도 critical reason
     dcas::PolicyRuntime runtime{};
     const auto output = runtime.Tick(MakeTick(false, dcas::Reason::INTOXICATED, 1000, 0.1, 0.1));
     ExpectTrue(output.step_b.next_state == dcas::DriverState::ABSENT, "intoxicated should jump to ABSENT");
@@ -349,26 +337,14 @@ void TestCriticalReasonIntoxicatedAlsoJumpsToAbsent() {
 }
 
 void TestLowBandFasterEscalation() {
-    // Bonus: LOW band (jetracer_input_0_4 < 0.30) 에서 속도 밴드 감지 검증
-    // 타이머는 별도이므로 단순히 상태 진입 확인만 (구체 타이머는 문서 기준)
     dcas::PolicyRuntime runtime{};
-    
-    // LOW band: jetracer_input_0_4 = 0.1 (< 0.30)
-    // rho_v = 0.1/0.4 = 0.25, 속도 밴드 LOW 이상을 트리거할 예정
     const auto low_band = runtime.Tick(MakeTick(false, dcas::Reason::DROWSY, 1000, 1.0, 0.1, 0.8));
-    // LOW band에서도 상태 전이가 발생해야 함 (타이머만 다름)
-    // 단순 진입은 OK (1s는 LOW band의 T_warn_eff보다 작을 수 있음)
     ExpectTrue(low_band.step_b.next_state == dcas::DriverState::OK || low_band.step_b.next_state == dcas::DriverState::WARNING,
                "LOW band should progress state based on its own timers");
 }
 
 void TestHighBandSlowerEscalation() {
-    // Bonus: HIGH band (jetracer_input_0_4 >= 0.65) 에서 감지 검증
     dcas::PolicyRuntime runtime{};
-    
-    // HIGH band: jetracer_input_0_4 = 0.39 (> 0.65 normalized)
-    // 실제 HIGH band는 0.4에서 더 큰 값이어야 하는데, 클램프 때문에 0.4 <= jetracer_input_0_4
-    // rho_v = 0.4/0.4 = 1.0 > 0.65 → HIGH band
     const auto high_band = runtime.Tick(MakeTick(false, dcas::Reason::DROWSY, 2000, 1.0, 0.4, 0.8));
     ExpectTrue(high_band.step_b.next_state == dcas::DriverState::OK || high_band.step_b.next_state == dcas::DriverState::WARNING,
                "HIGH band should progress state based on its own timers");
@@ -455,6 +431,87 @@ void TestSequenceTimelineReasonTimestampMismatchThenValidCritical() {
     ExpectTrue(valid_critical.step_c.hmi_action == dcas::HmiAction::MRM, "timeline async reason: ABSENT should map to MRM");
 }
 
+// ── BLOCKED_CAMERA 테스트 ──────────────────────────────────────────────────
+
+void TestBlockedCameraUnder10sWarning() {
+    dcas::PolicyRuntime runtime{};
+    dcas::RuntimeTickInput tick{};
+    tick.step_b.perception.is_attentive = true;
+    tick.step_b.perception.is_attentive_ts_ms = 1000;
+    tick.step_b.perception.camera_blocked = true;
+    tick.step_b.perception.camera_blocked_ts_ms = 1000;
+    tick.step_b.delta_s = 1.0;
+    tick.step_b.jetracer_input_0_4 = 0.2;
+    tick.step_c.previous_lkas_mode = dcas::LkasMode::ON_ACTIVE;
+    tick.step_c.lkas_throttle = 0.8;
+    tick.step_c.notebook_input_alive = true;
+
+    // snapshot_ts = 1000, camera_blocked_ts = 1000 → elapsed = 0s < 10s
+    const auto output = runtime.Tick(tick);
+    ExpectTrue(output.step_b.next_state == dcas::DriverState::WARNING, "camera blocked < 10s should enter WARNING");
+    ExpectTrue(output.step_b.reason == dcas::Reason::BLOCKED_CAMERA, "reason should be BLOCKED_CAMERA");
+    ExpectTrue(output.step_c.hmi_action == dcas::HmiAction::EOR, "WARNING should map to EOR");
+    ExpectTrue(!output.step_b.absent_latched_run_cycle, "camera blocked < 10s should not latch ABSENT");
+}
+
+void TestBlockedCameraOver10sTriggersMrm() {
+    dcas::PolicyRuntime runtime{};
+    dcas::RuntimeTickInput tick{};
+    tick.step_b.perception.is_attentive = true;
+    tick.step_b.perception.is_attentive_ts_ms = 11000;
+    tick.step_b.perception.camera_blocked = true;
+    tick.step_b.perception.camera_blocked_ts_ms = 1000;
+    tick.step_b.delta_s = 1.0;
+    tick.step_b.jetracer_input_0_4 = 0.2;
+    tick.step_c.previous_lkas_mode = dcas::LkasMode::ON_ACTIVE;
+    tick.step_c.lkas_throttle = 0.8;
+    tick.step_c.notebook_input_alive = true;
+
+    // snapshot_ts = 11000, camera_blocked_ts = 1000 → elapsed = 10s >= 10s
+    const auto output = runtime.Tick(tick);
+    ExpectTrue(output.step_b.next_state == dcas::DriverState::ABSENT, "camera blocked >= 10s should enter ABSENT");
+    ExpectTrue(output.step_b.reason == dcas::Reason::BLOCKED_CAMERA, "reason should be BLOCKED_CAMERA");
+    ExpectTrue(output.step_b.absent_latched_run_cycle, "camera blocked >= 10s should latch ABSENT");
+    ExpectTrue(output.step_c.hmi_action == dcas::HmiAction::MRM, "ABSENT should map to MRM");
+    ExpectTrue(output.step_c.mrm_active, "MRM should be active");
+    ExpectNear(output.step_c.throttle_limit, 0.0, 1e-9, "ABSENT should zero throttle");
+}
+
+void TestBlockedCameraRecoveryBefore10s() {
+    dcas::PolicyRuntime runtime{};
+
+    // 1tick: 카메라 가림 (5초 경과)
+    dcas::RuntimeTickInput blocked_tick{};
+    blocked_tick.step_b.perception.is_attentive = true;
+    blocked_tick.step_b.perception.is_attentive_ts_ms = 6000;
+    blocked_tick.step_b.perception.camera_blocked = true;
+    blocked_tick.step_b.perception.camera_blocked_ts_ms = 1000;
+    blocked_tick.step_b.delta_s = 1.0;
+    blocked_tick.step_b.jetracer_input_0_4 = 0.2;
+    blocked_tick.step_c.previous_lkas_mode = dcas::LkasMode::ON_ACTIVE;
+    blocked_tick.step_c.lkas_throttle = 0.8;
+    blocked_tick.step_c.notebook_input_alive = true;
+
+    const auto warning = runtime.Tick(blocked_tick);
+    ExpectTrue(warning.step_b.next_state == dcas::DriverState::WARNING, "5s blocked should be WARNING");
+
+    // 2tick: 카메라 다시 열림
+    dcas::RuntimeTickInput unblocked_tick{};
+    unblocked_tick.step_b.perception.is_attentive = true;
+    unblocked_tick.step_b.perception.is_attentive_ts_ms = 7000;
+    unblocked_tick.step_b.perception.camera_blocked = false;
+    unblocked_tick.step_b.delta_s = 3.1;
+    unblocked_tick.step_b.jetracer_input_0_4 = 0.2;
+    unblocked_tick.step_c.previous_lkas_mode = warning.step_c.next_lkas_mode;
+    unblocked_tick.step_c.lkas_throttle = 0.8;
+    unblocked_tick.step_c.notebook_input_alive = true;
+
+    const auto recovered = runtime.Tick(unblocked_tick);
+    ExpectTrue(recovered.step_b.next_state == dcas::DriverState::OK, "unblocked before 10s should recover to OK");
+    ExpectTrue(!recovered.step_b.absent_latched_run_cycle, "recovery should not latch ABSENT");
+    ExpectTrue(recovered.step_c.hmi_action == dcas::HmiAction::INFO, "recovered OK should map to INFO");
+}
+
 }  // namespace
 
 int main() {
@@ -471,8 +528,6 @@ int main() {
     TestStepCWarningCanClearEorAfter200msConfirmation();
     TestStepCNotebookInputAliveOnlyBlocksActivation();
     TestStepCAbsentActivatesMrmAndLockoutOnSecondActivation();
-    
-    // 추가 시나리오 (문서 전체 커버)
     TestNoReasonStillEscalatesByTimer();
     TestEscalationReengagementClearsButHoldsState();
     TestAllStateThrottleLimits();
@@ -483,7 +538,10 @@ int main() {
     TestSequenceTimelineWarningRecoverWithExplicitMockInputs();
     TestSequenceTimelineEscalationAbsentAndLatchWithExplicitMockInputs();
     TestSequenceTimelineReasonTimestampMismatchThenValidCritical();
-    
-    std::cout << "[PASS] dcas_policy_tests (23 comprehensive scenarios with sequence-driven mock inputs)\n";
+    TestBlockedCameraUnder10sWarning();
+    TestBlockedCameraOver10sTriggersMrm();
+    TestBlockedCameraRecoveryBefore10s();
+
+    std::cout << "[PASS] dcas_policy_tests (26 comprehensive scenarios with sequence-driven mock inputs)\n";
     return 0;
 }

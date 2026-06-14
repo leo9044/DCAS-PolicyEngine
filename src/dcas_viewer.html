@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DCAS Monitor</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+
+        :root {
+            --bg: #0a0c0f;
+            --panel: #111418;
+            --border: #1e2530;
+            --text: #c8d4e0;
+            --dim: #4a5568;
+            --ok: #00e5a0;
+            --warn: #f5a623;
+            --esc: #ff6b35;
+            --mrm: #ff2d55;
+            --cam: #7b61ff;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Rajdhani', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        /* ── Header ── */
+        .header {
+            width: 100%;
+            max-width: 1200px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .header-title {
+            font-size: 13px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            color: var(--dim);
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        .ws-status {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--dim);
+        }
+
+        .ws-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--dim);
+            transition: background 0.3s;
+        }
+
+        .ws-dot.connected { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+
+        /* ── Main Grid ── */
+        .main {
+            width: 100%;
+            max-width: 1200px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto auto;
+            gap: 16px;
+        }
+
+        /* ── Camera Panels ── */
+        .cam-panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .cam-label {
+            position: absolute;
+            top: 12px;
+            left: 14px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: var(--dim);
+            z-index: 2;
+            text-transform: uppercase;
+        }
+
+        .cam-feed {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #080a0d;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .cam-feed canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .cam-feed img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+
+        .cam-placeholder {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            color: var(--border);
+        }
+
+        .cam-placeholder svg {
+            width: 48px;
+            height: 48px;
+            opacity: 0.4;
+        }
+
+        .cam-placeholder span {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            letter-spacing: 2px;
+        }
+
+        /* ── Driver Attention Overlay ── */
+        .attention-bar {
+            padding: 10px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid var(--border);
+        }
+
+        .attention-label {
+            font-size: 12px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--dim);
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        .attention-value {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            transition: color 0.3s;
+        }
+
+        /* ── Status Panel (bottom, spans 2 cols) ── */
+        .status-panel {
+            grid-column: 1 / -1;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px 28px;
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            gap: 24px;
+            align-items: center;
+            transition: border-color 0.4s;
+        }
+
+        .stat-block {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .stat-label {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: var(--dim);
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            transition: color 0.3s;
+        }
+
+        /* ── Alert Box (center of status panel) ── */
+        .alert-box {
+            text-align: center;
+            padding: 16px 24px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            transition: background 0.4s, border-color 0.4s;
+        }
+
+        .alert-action {
+            font-size: 36px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            margin-bottom: 4px;
+            transition: color 0.3s;
+        }
+
+        .alert-desc {
+            font-size: 15px;
+            color: var(--dim);
+            letter-spacing: 1px;
+        }
+
+        /* ── State Colors ── */
+        .state-ok     { color: var(--ok); }
+        .state-warn   { color: var(--warn); }
+        .state-esc    { color: var(--esc); }
+        .state-mrm    { color: var(--mrm); }
+        .state-cam    { color: var(--cam); }
+
+        .border-ok  { border-color: var(--ok) !important; }
+        .border-warn { border-color: var(--warn) !important; }
+        .border-esc  { border-color: var(--esc) !important; }
+        .border-mrm  { border-color: var(--mrm) !important; }
+        .border-cam  { border-color: var(--cam) !important; }
+
+        .bg-ok   { background: rgba(0,229,160,0.08) !important; }
+        .bg-warn { background: rgba(245,166,35,0.08) !important; }
+        .bg-esc  { background: rgba(255,107,53,0.08) !important; }
+        .bg-mrm  { background: rgba(255,45,85,0.12) !important; }
+        .bg-cam  { background: rgba(123,97,255,0.08) !important; }
+
+        .blink {
+            animation: blink 0.8s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* ── Timestamp ── */
+        .footer {
+            width: 100%;
+            max-width: 1200px;
+            margin-top: 14px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .timestamp {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: var(--dim);
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <span class="header-title">DCAS · Level 2 Monitor</span>
+    <div class="ws-status">
+        <div class="ws-dot" id="wsDot"></div>
+        <span id="wsLabel">DISCONNECTED</span>
+    </div>
+</div>
+
+<div class="main">
+
+    <!-- 도로 카메라 -->
+    <div class="cam-panel">
+        <div class="cam-label">Road Camera · LKAS</div>
+        <div class="cam-feed">
+            <img id="lkasFeed" alt="lkas">
+            <div class="cam-placeholder" id="lkasPlaceholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                    <path d="M15 10l4.553-2.069A1 1 0 0121 8.87V15.13a1 1 0 01-1.447.9L15 14M3 8h12v8H3z"/>
+                </svg>
+                <span>No Feed</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 운전자 카메라 -->
+    <div class="cam-panel">
+        <div class="cam-label">Driver Camera · DMS</div>
+        <div class="cam-feed">
+            <img id="driverFeed" alt="driver">
+            <div class="cam-placeholder" id="driverPlaceholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                    <circle cx="12" cy="8" r="4"/>
+                    <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+                </svg>
+                <span>No Feed</span>
+            </div>
+        </div>
+        <div class="attention-bar">
+            <span class="attention-label">Driver Attention</span>
+            <span class="attention-value" id="attentionValue">--</span>
+        </div>
+    </div>
+
+    <!-- 상태 패널 -->
+    <div class="status-panel" id="statusPanel">
+        <div class="stat-block">
+            <span class="stat-label">Driver State</span>
+            <span class="stat-value" id="driverState">--</span>
+            <span class="stat-label" style="margin-top:12px">LKAS Mode</span>
+            <span class="stat-value" style="font-size:18px" id="lkasMode">--</span>
+        </div>
+
+        <div class="alert-box" id="alertBox">
+            <div class="alert-action" id="hmiAction">--</div>
+            <div class="alert-desc" id="alertDesc">System Standby</div>
+        </div>
+
+        <div class="stat-block" style="text-align:right">
+            <span class="stat-label">Reason</span>
+            <span class="stat-value" style="font-size:18px" id="reasonVal">--</span>
+            <span class="stat-label" style="margin-top:12px">MRM Active</span>
+            <span class="stat-value" style="font-size:18px" id="mrmActive">--</span>
+        </div>
+    </div>
+
+</div>
+
+<div class="footer">
+    <span class="timestamp" id="timestamp">--</span>
+</div>
+
+<script>
+    const WS_PORT = {{WS_PORT}};
+
+    // ── State → UI Mapping ──
+    const STATE_MAP = {
+        OK:         { cls: 'state-ok',  border: 'border-ok',  bg: 'bg-ok',  desc: 'Normal Driving' },
+        WARNING:    { cls: 'state-warn',border: 'border-warn',bg: 'bg-warn',desc: 'Eyes on Road' },
+        ESCALATION: { cls: 'state-esc', border: 'border-esc', bg: 'bg-esc', desc: 'Take Control Now' },
+        ABSENT:     { cls: 'state-mrm', border: 'border-mrm', bg: 'bg-mrm', desc: 'MRM Active' },
+    };
+
+    const REASON_MAP = {
+        none:           'None',
+        phone:          'Phone Use',
+        drowsy:         'Drowsiness',
+        unresponsive:   'Unresponsive',
+        intoxicated:    'Intoxication',
+        blocked_camera: 'Camera Blocked',
+        unknown:        'Unknown',
+    };
+
+    const HMI_MAP = {
+        INFO: { text: 'Normal',       cls: 'state-ok' },
+        EOR:  { text: 'Eyes on Road', cls: 'state-warn' },
+        DCA:  { text: 'Take Control', cls: 'state-esc' },
+        MRM:  { text: 'MRM',      cls: 'state-mrm' },
+    };
+
+    // ── DOM refs ──
+    const els = {
+        wsDot:       document.getElementById('wsDot'),
+        wsLabel:     document.getElementById('wsLabel'),
+        driverState: document.getElementById('driverState'),
+        lkasMode:    document.getElementById('lkasMode'),
+        hmiAction:   document.getElementById('hmiAction'),
+        alertDesc:   document.getElementById('alertDesc'),
+        reasonVal:   document.getElementById('reasonVal'),
+        mrmActive:   document.getElementById('mrmActive'),
+        statusPanel: document.getElementById('statusPanel'),
+        alertBox:    document.getElementById('alertBox'),
+        attentionValue: document.getElementById('attentionValue'),
+        timestamp:   document.getElementById('timestamp'),
+        lkasFeed:    document.getElementById('lkasFeed'),
+        driverFeed:  document.getElementById('driverFeed'),
+        lkasPlaceholder:   document.getElementById('lkasPlaceholder'),
+        driverPlaceholder: document.getElementById('driverPlaceholder'),
+    };
+
+    const STATE_CLASSES = ['state-ok','state-warn','state-esc','state-mrm','state-cam'];
+    const BORDER_CLASSES = ['border-ok','border-warn','border-esc','border-mrm','border-cam'];
+    const BG_CLASSES     = ['bg-ok','bg-warn','bg-esc','bg-mrm','bg-cam'];
+
+    function clearClasses(el, list) {
+        el.classList.remove(...list);
+    }
+
+    function applyState(data) {
+        const s = STATE_MAP[data.driver_state] || STATE_MAP.OK;
+        const h = HMI_MAP[data.hmi_action]    || HMI_MAP.INFO;
+
+        // Driver State
+        clearClasses(els.driverState, STATE_CLASSES);
+        els.driverState.textContent = data.driver_state;
+        els.driverState.classList.add(s.cls);
+
+        // LKAS Mode
+        els.lkasMode.textContent = data.lkas_mode || '--';
+
+        // HMI Action
+        clearClasses(els.hmiAction, STATE_CLASSES);
+        els.hmiAction.textContent = h.text;
+        els.hmiAction.classList.add(h.cls);
+
+        // Alert desc
+        els.alertDesc.textContent = s.desc;
+
+        // Reason
+        els.reasonVal.textContent = REASON_MAP[data.reason] || data.reason || '--';
+        if (data.reason === 'blocked_camera') {
+            clearClasses(els.reasonVal, STATE_CLASSES);
+            els.reasonVal.classList.add('state-cam');
+        }
+
+        // MRM
+        els.mrmActive.textContent = data.mrm_active ? 'YES' : 'NO';
+        clearClasses(els.mrmActive, STATE_CLASSES);
+        els.mrmActive.classList.add(data.mrm_active ? 'state-mrm' : 'state-ok');
+
+        // Status panel border + bg
+        clearClasses(els.statusPanel, BORDER_CLASSES);
+        clearClasses(els.alertBox, BG_CLASSES);
+        els.statusPanel.classList.add(s.border);
+        els.alertBox.classList.add(s.bg);
+
+        // Blink on DCA/MRM
+        if (data.hmi_action === 'DCA' || data.hmi_action === 'MRM') {
+            els.hmiAction.classList.add('blink');
+        } else {
+            els.hmiAction.classList.remove('blink');
+        }
+
+        // Driver attention
+        const attentive = data.is_attentive;
+        els.attentionValue.textContent = attentive ? 'Attentive' : 'Distracted';
+        clearClasses(els.attentionValue, STATE_CLASSES);
+        els.attentionValue.classList.add(attentive ? 'state-ok' : 'state-mrm');
+
+        // Timestamp
+        els.timestamp.textContent = `Updated: ${data.timestamp || new Date().toLocaleTimeString()}`;
+    }
+
+    // ── WebSocket ──
+    let ws = null;
+    let lkasBlob = null;
+    let driverBlob = null;
+
+    // Track which frame type is next (simple toggle for single binary stream)
+    // Server sends JSON for status, binary for frames with prefix byte
+    // prefix: 0x01 = lkas frame, 0x02 = driver frame
+
+    function connect() {
+        const url = `ws://${location.hostname}:${WS_PORT}`;
+        ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = () => {
+            els.wsDot.classList.add('connected');
+            els.wsLabel.textContent = 'CONNECTED';
+        };
+
+        ws.onclose = () => {
+            els.wsDot.classList.remove('connected');
+            els.wsLabel.textContent = 'DISCONNECTED';
+            setTimeout(connect, 2000);
+        };
+
+        ws.onerror = () => ws.close();
+
+        ws.onmessage = (ev) => {
+            if (typeof ev.data === 'string') {
+                try {
+                    const data = JSON.parse(ev.data);
+                    if (data.type === 'status') applyState(data);
+                } catch (e) {}
+                return;
+            }
+
+            // Binary: first byte = channel (1=lkas, 2=driver)
+            const buf = new Uint8Array(ev.data);
+            const channel = buf[0];
+            const jpeg = new Blob([buf.slice(1)], { type: 'image/jpeg' });
+            const url = URL.createObjectURL(jpeg);
+
+            if (channel === 1) {
+                if (lkasBlob) URL.revokeObjectURL(lkasBlob);
+                lkasBlob = url;
+                els.lkasFeed.src = url;
+                els.lkasFeed.style.display = 'block';
+                els.lkasPlaceholder.style.display = 'none';
+            } else if (channel === 2) {
+                if (driverBlob) URL.revokeObjectURL(driverBlob);
+                driverBlob = url;
+                els.driverFeed.src = url;
+                els.driverFeed.style.display = 'block';
+                els.driverPlaceholder.style.display = 'none';
+            }
+        };
+    }
+
+    connect();
+</script>
+</body>
+</html>

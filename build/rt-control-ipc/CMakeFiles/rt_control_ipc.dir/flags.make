@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/leo/ads-skynet/rt-control-ipc/include
+CXX_INCLUDES = -I/home/siwoo/ads-skynet/rt-control-ipc/include
 
-CXX_FLAGS = -g -Wall -Wextra -Wpedantic -std=c++17
+CXX_FLAGS = -Wall -Wextra -Wpedantic -std=c++17
 

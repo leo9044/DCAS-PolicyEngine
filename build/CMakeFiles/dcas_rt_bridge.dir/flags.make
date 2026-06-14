@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/leo/ads-skynet/DCAS-PolicyEngine/include -I/home/leo/ads-skynet/rt-control-ipc/include
+CXX_INCLUDES = -I/usr/include/mit-krb5 -I/usr/include/pgm-5.3 -I/usr/include/libxml2 -I/home/siwoo/ads-skynet/DCAS-PolicyEngine/include -I/home/siwoo/ads-skynet/rt-control-ipc/include
 
-CXX_FLAGS = -g -std=c++17
+CXX_FLAGS = -std=c++17
 

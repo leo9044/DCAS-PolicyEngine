@@ -48,6 +48,8 @@ void PrintUsage(const char* argv0) {
         << "  --switch EVENT               NONE|ON|OFF (default: NONE)\n"
         << "  --override true|false        Driver override input (default: false)\n"
         << "  --notebook-alive true|false  Perception notebook alive (default: true)\n"
+        << "  --camera-blocked true|false  Camera blocked signal (default: false)\n"
+        << "  --camera-blocked-ts MS       Timestamp when blockage was first detected (default: 0)\n"
         << "  --help                       Show this help\n";
 }
 
@@ -67,6 +69,8 @@ int main(int argc, char** argv) {
     dcas::LkasSwitchEvent switch_event = dcas::LkasSwitchEvent::NONE;
     bool driver_override = false;
     bool notebook_alive = true;
+    bool camera_blocked = false;
+    std::int64_t camera_blocked_ts_ms = 0;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -106,6 +110,10 @@ int main(int argc, char** argv) {
             driver_override = ParseBool(require_value("--override"));
         } else if (arg == "--notebook-alive") {
             notebook_alive = ParseBool(require_value("--notebook-alive"));
+        } else if (arg == "--camera-blocked") {
+            camera_blocked = ParseBool(require_value("--camera-blocked"));
+        } else if (arg == "--camera-blocked-ts") {
+            camera_blocked_ts_ms = std::stoll(require_value("--camera-blocked-ts"));
         } else {
             std::cerr << "Unknown option: " << arg << "\n";
             PrintUsage(argv[0]);
@@ -126,6 +134,8 @@ int main(int argc, char** argv) {
         tick.step_b.perception.is_attentive_ts_ms = tick_ts;
         tick.step_b.perception.reason = reason;
         tick.step_b.perception.reason_ts_ms = reason_ts_overridden ? reason_ts_ms : tick_ts;
+        tick.step_b.perception.camera_blocked = camera_blocked;
+        tick.step_b.perception.camera_blocked_ts_ms = camera_blocked_ts_ms;
         tick.step_b.jetracer_input_0_4 = jetracer_input_0_4;
         tick.step_b.delta_s = delta_s;
 

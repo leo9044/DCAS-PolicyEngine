@@ -1,1 +1,1 @@
-/usr/bin/c++ -g CMakeFiles/dcas_rt_bridge.dir/src/dcas_rt_bridge.cpp.o -o dcas_rt_bridge  libdcas_policy_engine.a rt-control-ipc/librt_control_ipc.a -lrt 
+/usr/bin/c++ CMakeFiles/dcas_rt_bridge.dir/src/dcas_rt_bridge.cpp.o -o dcas_rt_bridge  libdcas_policy_engine.a rt-control-ipc/librt_control_ipc.a -lrt -lzmq 
