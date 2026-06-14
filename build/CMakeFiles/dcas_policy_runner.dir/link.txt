@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/dcas_policy_runner.dir/src/main.cpp.o -o dcas_policy_runner  libdcas_policy_engine.a 

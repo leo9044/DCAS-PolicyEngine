@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdcas_policy_engine.a CMakeFiles/dcas_policy_engine.dir/src/step_b.cpp.o CMakeFiles/dcas_policy_engine.dir/src/step_c.cpp.o CMakeFiles/dcas_policy_engine.dir/src/policy_runtime.cpp.o
+/usr/bin/ranlib libdcas_policy_engine.a

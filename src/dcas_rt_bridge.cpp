@@ -1,18 +1,21 @@
 #include <chrono>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <string>
 #include <thread>
 
 #include <mqueue.h>
+#include <zmq.h>
 
 #include "dcas_policy_engine/policy_runtime.hpp"
 #include "rt_control_shm.hpp"
 
 namespace {
 
-constexpr const char* kMrmQueueName = "/mrm_event_queue";
+constexpr const char* kMrmQueueName  = "/mrm_event_queue";
+constexpr int         kStatusPubPort = 5565;
 
 std::uint64_t now_us() {
     using namespace std::chrono;
@@ -33,15 +36,6 @@ float speed_to_jetracer_input(float speed_kmh) {
 
 bool parse_bool(const std::string& value) {
     return value == "1" || value == "true" || value == "yes" || value == "on";
-}
-
-dcas::Reason parse_reason(const std::string& value) {
-    if (value == "phone") return dcas::Reason::PHONE;
-    if (value == "drowsy") return dcas::Reason::DROWSY;
-    if (value == "unresponsive") return dcas::Reason::UNRESPONSIVE;
-    if (value == "intoxicated") return dcas::Reason::INTOXICATED;
-    if (value == "none") return dcas::Reason::NONE;
-    return dcas::Reason::UNKNOWN;
 }
 
 dcas::LkasMode parse_lkas_mode(const std::string& value) {
@@ -69,8 +63,6 @@ void send_mrm_event(bool mrm_request, std::uint8_t target_mode) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    bool is_attentive = true;
-    dcas::Reason reason = dcas::Reason::NONE;
     bool notebook_input_alive = true;
     bool driver_override = false;
     double delta_s = 0.02;
@@ -81,11 +73,7 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "--attentive" && i + 1 < argc) {
-            is_attentive = parse_bool(argv[++i]);
-        } else if (arg == "--reason" && i + 1 < argc) {
-            reason = parse_reason(argv[++i]);
-        } else if (arg == "--dt" && i + 1 < argc) {
+        if (arg == "--dt" && i + 1 < argc) {
             delta_s = std::stod(argv[++i]);
         } else if (arg == "--period-ms" && i + 1 < argc) {
             period_ms = std::stoi(argv[++i]);
@@ -103,10 +91,11 @@ int main(int argc, char** argv) {
             verbose = true;
         } else if (arg == "--help") {
             std::cout
-                << "Usage: dcas_rt_bridge [--attentive true|false] [--reason name] [--dt seconds]\n"
-                << "                      [--period-ms n] [--iterations n|--once] [--verbose]\n"
+                << "Usage: dcas_rt_bridge [--dt seconds] [--period-ms n] [--iterations n|--once]\n"
                 << "                      [--notebook-alive true|false] [--driver-override true|false]\n"
-                << "                      [--lkas-mode OFF|ON_INACTIVE|ON_ACTIVE]\n";
+                << "                      [--lkas-mode OFF|ON_INACTIVE|ON_ACTIVE] [--verbose]\n"
+                << "  Perception input (is_attentive, reason, camera_blocked) is read live from\n"
+                << "  rt_control_shm perception_to_dcas slot written by Jetson A.\n";
             return 0;
         }
     }
@@ -121,12 +110,37 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    void* zmq_ctx = zmq_ctx_new();
+    void* zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
+    int   sndhwm  = 1;
+    zmq_setsockopt(zmq_pub, ZMQ_SNDHWM, &sndhwm, sizeof(sndhwm));
+    {
+        char addr[64];
+        std::snprintf(addr, sizeof(addr), "tcp://*:%d", kStatusPubPort);
+        zmq_bind(zmq_pub, addr);
+    }
+    std::printf("[DCAS] Status publisher bound on port %d\n", kStatusPubPort);
+    std::fflush(stdout);
+
     dcas::PolicyRuntime runtime{};
 
     rt_ipc::ActuatorToDcasSample speed_sample{};
     rt_ipc::LkasToDcasSample lkas_sample{};
     bool have_speed = false;
     bool have_lkas = false;
+
+    // Safe defaults held across ticks; updated whenever Jetson A writes to SHM.
+    bool tick_is_attentive   = true;
+    dcas::Reason tick_reason = dcas::Reason::NONE;
+    bool tick_camera_blocked = false;
+
+    int log_tick = 0;
+    const std::uint64_t startup_us = now_us();
+    constexpr std::uint64_t kGracePeriodUs = 3'000'000ULL;  // 3 s
+
+    std::printf("[DCAS] Bridge started\n");
+    std::fflush(stdout);
+    runtime.ResetForNewRunCycle(1);
 
     while (iterations != 0) {
         if (shm.read_actuator_to_dcas(speed_sample)) {
@@ -142,13 +156,24 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        if (now_us() - startup_us >= kGracePeriodUs) {
+            rt_ipc::PerceptionToDcasSample perception_sample{};
+            if (shm.read_perception_to_dcas(perception_sample)) {
+                tick_is_attentive   = static_cast<bool>(perception_sample.is_attentive);
+                tick_reason         = static_cast<dcas::Reason>(perception_sample.reason);
+                tick_camera_blocked = static_cast<bool>(perception_sample.camera_blocked);
+            }
+        }
+        // else: grace period active — hold safe defaults (is_attentive=true, reason=NONE)
+
         dcas::RuntimeTickInput tick{};
         const std::int64_t tick_ts = static_cast<std::int64_t>(now_us() / 1000);
 
-        tick.step_b.perception.is_attentive = is_attentive;
-        tick.step_b.perception.is_attentive_ts_ms = tick_ts;
-        tick.step_b.perception.reason = reason;
-        tick.step_b.perception.reason_ts_ms = tick_ts;
+        tick.step_b.perception.is_attentive        = tick_is_attentive;
+        tick.step_b.perception.is_attentive_ts_ms  = tick_ts;
+        tick.step_b.perception.reason              = tick_reason;
+        tick.step_b.perception.reason_ts_ms        = tick_ts;
+        tick.step_b.perception.camera_blocked      = tick_camera_blocked;
         tick.step_b.jetracer_input_0_4 = speed_to_jetracer_input(speed_sample.current_speed_kmh);
         tick.step_b.delta_s = delta_s;
 
@@ -160,6 +185,19 @@ int main(int argc, char** argv) {
 
         const dcas::RuntimeTickOutput output = runtime.Tick(tick);
         lkas_mode = output.step_c.next_lkas_mode;
+
+        if (++log_tick % 30 == 0) {
+            std::printf("[DCAS] is_attentive=%d reason=%d camera_blocked=%d"
+                        " | state=%s mrm=%d throttle_limit=%.2f hmi=%d\n",
+                        static_cast<int>(tick_is_attentive),
+                        static_cast<int>(tick_reason),
+                        static_cast<int>(tick_camera_blocked),
+                        dcas::to_string(output.step_b.next_state),
+                        static_cast<int>(output.step_c.mrm_active),
+                        output.step_c.throttle_limit,
+                        static_cast<int>(output.step_c.hmi_action));
+            std::fflush(stdout);
+        }
 
         rt_ipc::DcasToActuatorSample out{};
         out.timestamp_us = now_us();
@@ -189,11 +227,28 @@ int main(int argc, char** argv) {
             send_mrm_event(true, static_cast<std::uint8_t>(output.step_c.next_lkas_mode));
         }
 
+        {
+            char buf[256];
+            int  len = std::snprintf(buf, sizeof(buf),
+                "{\"driver_state\":\"%s\",\"hmi_action\":\"%s\","
+                "\"lkas_mode\":\"%s\",\"reason\":\"%s\","
+                "\"mrm_active\":%s,\"is_attentive\":%s}",
+                dcas::to_string(output.step_b.next_state),
+                dcas::to_string(output.step_c.hmi_action),
+                dcas::to_string(output.step_c.next_lkas_mode),
+                dcas::to_string(output.step_b.reason),
+                output.step_c.mrm_active  ? "true" : "false",
+                tick_is_attentive         ? "true" : "false");
+            zmq_send(zmq_pub, buf, len, ZMQ_NOBLOCK);
+        }
+
         if (iterations > 0) {
             --iterations;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
     }
 
+    zmq_close(zmq_pub);
+    zmq_ctx_destroy(zmq_ctx);
     return 0;
 }

@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/dcas_policy_tests.dir/tests/test_policy.cpp.o -o dcas_policy_tests  libdcas_policy_engine.a 

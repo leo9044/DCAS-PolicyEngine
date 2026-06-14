@@ -18,9 +18,12 @@ add_subdirectory(../rt-control-ipc rt-control-ipc)
 add_executable(dcas_policy_runner src/main.cpp)
 target_link_libraries(dcas_policy_runner PRIVATE dcas_policy_engine)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZMQ REQUIRED libzmq)
+
 add_executable(dcas_rt_bridge src/dcas_rt_bridge.cpp)
-target_link_libraries(dcas_rt_bridge PRIVATE dcas_policy_engine rt_control_ipc)
-target_link_libraries(dcas_rt_bridge PRIVATE rt)
+target_link_libraries(dcas_rt_bridge PRIVATE dcas_policy_engine rt_control_ipc rt ${ZMQ_LIBRARIES})
+target_include_directories(dcas_rt_bridge PRIVATE ${ZMQ_INCLUDE_DIRS})
 
 enable_testing()
 add_executable(dcas_policy_tests tests/test_policy.cpp)

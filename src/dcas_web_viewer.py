@@ -25,11 +25,58 @@ import json
 import time
 import cv2
 import numpy as np
+import zmq
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 from typing import Optional, Set, Dict
 import websockets
+
+try:
+    from common.config import ConfigManager
+except ImportError:
+    ConfigManager = None  # type: ignore
+
+_DEFAULT_ZMQ_URL        = "tcp://localhost:5557"
+_DEFAULT_DRIVER_FEED_URL = "tcp://192.168.86.35:5564"
+
+
+def _load_zmq_url() -> str:
+    if ConfigManager is not None:
+        try:
+            cfg = ConfigManager.load()
+            comm = cfg.communication
+            host = comm.zmq_broadcast_host
+            if host == "*":
+                host = "localhost"
+            return f"tcp://{host}:{comm.zmq_broadcast_port}"
+        except Exception:
+            pass
+    return _DEFAULT_ZMQ_URL
+
+
+def _load_driver_feed_url() -> str:
+    if ConfigManager is not None:
+        try:
+            cfg = ConfigManager.load()
+            comm = cfg.communication
+            return f"tcp://{comm.jetson_a_ip}:{comm.driver_feed_port}"
+        except Exception:
+            pass
+    return _DEFAULT_DRIVER_FEED_URL
+
+
+_DEFAULT_DCAS_STATUS_URL = "tcp://localhost:5565"
+
+
+def _load_dcas_status_url() -> str:
+    if ConfigManager is not None:
+        try:
+            cfg = ConfigManager.load()
+            return f"tcp://localhost:{cfg.communication.dcas_status_port}"
+        except Exception:
+            pass
+    return _DEFAULT_DCAS_STATUS_URL
 
 
 HTTP_PORT = 8088
@@ -166,6 +213,148 @@ class DCASWebSocketServer:
             print(f"[DCAS-WS] Client disconnected: {addr}")
 
 
+# ── LKAS Frame Subscriber ───────────────────────────────────────
+
+class LKASFrameSubscriber:
+    """Daemon thread that subscribes to the LKAS ZMQ broadcast and feeds frames."""
+
+    def __init__(self, zmq_url: str, broadcast_fn):
+        self._url = zmq_url
+        self._broadcast = broadcast_fn
+        self._stop_event = Event()
+        self._thread: Optional[Thread] = None
+
+    def start(self):
+        self._stop_event.clear()
+        self._thread = Thread(target=self._run, daemon=True, name="lkas-frame-sub")
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+    def _run(self):
+        ctx = zmq.Context()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.SUBSCRIBE, b'frame')
+        sock.setsockopt(zmq.RCVTIMEO, 100)  # ms — lets us check stop_event
+        sock.setsockopt(zmq.RCVHWM, 5)      # drop stale frames if we're slow
+        sock.connect(self._url)
+        print(f"[DCAS-LKAS] Subscribed to {self._url}")
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    parts = sock.recv_multipart()
+                    if len(parts) < 3:
+                        continue
+                    buf = np.frombuffer(parts[2], dtype=np.uint8)
+                    frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        self._broadcast(frame)
+                except zmq.Again:
+                    pass  # 100 ms timeout — loop and recheck stop_event
+        finally:
+            sock.close()
+            ctx.term()
+            print("[DCAS-LKAS] Subscriber stopped")
+
+
+# ── Driver Frame Subscriber ─────────────────────────────────────
+
+class DriverFrameSubscriber:
+    """Daemon thread that subscribes to dms.py on Jetson A and feeds driver frames."""
+
+    def __init__(self, zmq_url: str, broadcast_fn):
+        self._url = zmq_url
+        self._broadcast = broadcast_fn
+        self._stop_event = Event()
+        self._thread: Optional[Thread] = None
+
+    def start(self):
+        self._stop_event.clear()
+        self._thread = Thread(target=self._run, daemon=True, name="driver-frame-sub")
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+    def _run(self):
+        ctx = zmq.Context()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.SUBSCRIBE, b'driver_frame')
+        sock.setsockopt(zmq.RCVTIMEO, 100)
+        sock.setsockopt(zmq.RCVHWM, 5)
+        sock.connect(self._url)
+        print(f"[DCAS-DRV] Subscribed to {self._url}")
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    parts = sock.recv_multipart()
+                    if len(parts) < 2:
+                        continue
+                    buf = np.frombuffer(parts[1], dtype=np.uint8)
+                    frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        self._broadcast(frame)
+                except zmq.Again:
+                    pass
+        finally:
+            sock.close()
+            ctx.term()
+            print("[DCAS-DRV] Subscriber stopped")
+
+
+# ── DCAS Status Subscriber ──────────────────────────────────────
+
+class DCASStatusSubscriber:
+    """Daemon thread that subscribes to dcas_rt_bridge JSON status and feeds broadcast_status."""
+
+    def __init__(self, zmq_url: str, broadcast_fn):
+        self._url = zmq_url
+        self._broadcast = broadcast_fn
+        self._stop_event = Event()
+        self._thread: Optional[Thread] = None
+
+    def start(self):
+        self._stop_event.clear()
+        self._thread = Thread(target=self._run, daemon=True, name="dcas-status-sub")
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+    def _run(self):
+        ctx = zmq.Context()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt(zmq.SUBSCRIBE, b'')
+        sock.setsockopt(zmq.RCVTIMEO, 100)
+        sock.setsockopt(zmq.RCVHWM, 5)
+        sock.connect(self._url)
+        print(f"[DCAS-STATUS] Subscribed to {self._url}")
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    raw = sock.recv()
+                    data = json.loads(raw)
+                    self._broadcast(data)
+                except zmq.Again:
+                    pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+        finally:
+            sock.close()
+            ctx.term()
+            print("[DCAS-STATUS] Subscriber stopped")
+
+
 # ── HTTP Server ─────────────────────────────────────────────────
 
 class DCASHTTPServer:
@@ -254,7 +443,10 @@ class DCASWebViewer:
         viewer.stop()
     """
 
-    def __init__(self, http_port: int = HTTP_PORT, ws_port: int = WS_PORT):
+    def __init__(self, http_port: int = HTTP_PORT, ws_port: int = WS_PORT,
+                 zmq_url: Optional[str] = None,
+                 driver_feed_url: Optional[str] = None,
+                 dcas_status_url: Optional[str] = None):
         self.http_port = http_port
         self.ws_port   = ws_port
 
@@ -264,15 +456,27 @@ class DCASWebViewer:
         self._last_driver_time = 0.0
         self._last_status_time = 0.0
 
-        self.ws_server   = DCASWebSocketServer(port=ws_port)
-        self.http_server = DCASHTTPServer(port=http_port, ws_port=ws_port)
+        self.ws_server     = DCASWebSocketServer(port=ws_port)
+        self.http_server   = DCASHTTPServer(port=http_port, ws_port=ws_port)
+        self._lkas_sub     = LKASFrameSubscriber(
+            zmq_url or _load_zmq_url(), self.broadcast_lkas_frame)
+        self._driver_sub   = DriverFrameSubscriber(
+            driver_feed_url or _load_driver_feed_url(), self.broadcast_driver_frame)
+        self._status_sub   = DCASStatusSubscriber(
+            dcas_status_url or _load_dcas_status_url(), self.broadcast_status)
 
     def start(self):
         self.http_server.start()
         self.ws_server.start()
+        self._lkas_sub.start()
+        self._driver_sub.start()
+        self._status_sub.start()
         print(f"\n[DCAS Viewer] http://localhost:{self.http_port}\n")
 
     def stop(self):
+        self._lkas_sub.stop()
+        self._driver_sub.stop()
+        self._status_sub.stop()
         self.ws_server.stop()
         self.http_server.stop()
 
@@ -360,7 +564,7 @@ if __name__ == '__main__':
             offset = int(math.sin(t * 0.5) * 30)
             cv2.line(road, (frame_w//2 - 80 + offset, frame_h), (frame_w//2 - 40 + offset, frame_h//2), (255, 255, 255), 2)
             cv2.line(road, (frame_w//2 + 80 + offset, frame_h), (frame_w//2 + 40 + offset, frame_h//2), (255, 255, 255), 2)
-            viewer.broadcast_lkas_frame(road)
+            # viewer.broadcast_lkas_frame(road)
 
             # Mock 운전자 카메라
             driver = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
@@ -374,10 +578,10 @@ if __name__ == '__main__':
                 cv2.ellipse(driver, (cx, cy), (25, 15), 0, 0, 180, (255, 255, 255), 2)
             else:
                 cv2.line(driver, (cx - 25, cy), (cx + 25, cy), (100, 100, 100), 2)
-            viewer.broadcast_driver_frame(driver)
+            # viewer.broadcast_driver_frame(driver)
 
-            # 상태 전송
-            viewer.broadcast_status(dict(s))
+            # 상태 전송 — real data comes from DCASStatusSubscriber (dcas_rt_bridge:5565)
+            # viewer.broadcast_status(dict(s))
 
             t += 0.05
             time.sleep(0.033)  # ~30 FPS
