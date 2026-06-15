@@ -33,7 +33,7 @@ from typing import Optional, Set, Dict
 import websockets
 
 try:
-    from common.config import ConfigManager
+    from common.src.config.config import ConfigManager
 except ImportError:
     ConfigManager = None  # type: ignore
 
