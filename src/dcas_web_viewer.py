@@ -38,7 +38,7 @@ except ImportError:
     ConfigManager = None  # type: ignore
 
 _DEFAULT_ZMQ_URL        = "tcp://localhost:5557"
-_DEFAULT_DRIVER_FEED_URL = "tcp://192.168.86.35:5564"
+_DEFAULT_DRIVER_FEED_URL = "tcp://192.168.86.32:5564"
 
 
 def _load_zmq_url() -> str:
