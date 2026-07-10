@@ -1,5 +1,15 @@
 # DCAS-PolicyEngine
 
+> ⚠️ **Notice:** This repository is one of the core modules in the **DCAS** project.
+>
+> **DCAS System Components**
+>
+> - [Lkas](https://github.com/leo9044/Lkas) - lane detection and broadcast loop
+> - [DCAS-PolicyEngine](https://github.com/leo9044/DCAS-PolicyEngine) - **current repository**
+> - [Vehicle-jetracer](https://github.com/leo9044/Vehicle-jetracer) - vehicle runtime and actuator-facing vehicle process
+> - [rt-actuator](https://github.com/leo9044/rt-actuator) - real-time actuator HAL
+> - [DCAS umbrella](https://github.com/leo9044/DCAS) - system blueprint and module index
+
 Step B(상태 전이) + Step C(제어 정책) 기준선 구현을 위한 C++ 레퍼지토리입니다.
 
 ## 구조
