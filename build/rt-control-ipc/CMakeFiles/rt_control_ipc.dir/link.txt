@@ -1,2 +1,0 @@
-/usr/bin/ar qc librt_control_ipc.a CMakeFiles/rt_control_ipc.dir/src/rt_control_shm.cpp.o
-/usr/bin/ranlib librt_control_ipc.a
